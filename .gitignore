@@ -25,3 +25,9 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+# Saved Locations
+*.locsim
+
+# Electron Builder Output
+dist-electron
+release

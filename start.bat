@@ -1,37 +1,24 @@
 @echo off
-TITLE Location Simulator v1.0.0
-COLOR 0A
-CLS
+title Location Simulator Launcher
 
-echo ================================================================
-echo           Location Simulator v1.0.0 Launcher
-echo ================================================================
-echo.
+echo Starting Location Simulator...
 
-IF NOT EXIST "node_modules" (
-    echo [!] First-time run detected. Installing Node dependencies...
-    echo.
-    call npm install
-    IF ERRORLEVEL 1 (
-        echo [X] Error installing Node dependencies. Make sure Node.js is installed.
-        pause
-        exit /b 1
-    )
+REM Ensure node modules are installed
+if not exist "node_modules\" (
+    echo [INFO] Installing required Node.js dependencies...
+    npm install
 )
 
-echo [+] Checking Python backend dependencies (pymobiledevice3)...
-python -m pip install -r src\backend\requirements.txt >nul 2>&1
-IF ERRORLEVEL 1 (
-    echo [!] Warning: Could not automatically pip install pymobiledevice3.
+REM Ensure Python environment is setup
+if not exist "venv\" (
+    echo [INFO] Creating Python virtual environment...
+    python -m venv venv && call venv\Scripts\activate.bat && pip install -r src\backend\requirements.txt websockets
+) else (
+    call venv\Scripts\activate.bat
 )
 
-echo.
-echo [+] Starting Location Simulator Desktop App...
-echo.
-call npm start
+echo [INFO] Starting Location Simulator application...
+REM Compile TS and run via Vite + Electron
+npm run dev
 
-IF ERRORLEVEL 1 (
-    echo.
-    echo [X] Application stopped with an error code.
-    pause
-)
+pause
