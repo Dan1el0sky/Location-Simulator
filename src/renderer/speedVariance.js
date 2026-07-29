@@ -1,5 +1,6 @@
 /**
  * Humanized Speed Variance & Pause State Machine for Location Simulator v1.0.0
+ * Provides organic, non-robotic movement for Pokémon GO & Pikmin Bloom.
  */
 
 export const SimulationState = {
@@ -14,7 +15,7 @@ export class SpeedVarianceEngine {
   constructor(config = {}) {
     this.targetSpeedKmh = config.targetSpeedKmh || 4.0;
     this.enableVariance = config.enableVariance !== undefined ? config.enableVariance : true;
-    this.varianceRangePct = config.varianceRangePct || 0.25; // +/- 25% noise
+    this.varianceRangePct = config.varianceRangePct || 0.20; // ±20% noise
     
     // Auto Pause configuration
     this.enableAutoPause = config.enableAutoPause !== undefined ? config.enableAutoPause : true;
@@ -25,16 +26,24 @@ export class SpeedVarianceEngine {
     // State internal tracking
     this.currentState = SimulationState.STOPPED;
     this.currentSpeedKmh = 0.0;
+    
+    // Smooth target noise interpolation (changes target every 5-8 seconds)
+    this.noiseTargetSpeedKmh = this.targetSpeedKmh;
+    this.timeSinceLastNoiseChangeSec = 0.0;
+    this.noiseIntervalSec = 6.0;
+
+    // Pause state tracking
     this.timeSinceLastPauseSec = 0.0;
     this.nextPauseTimeSec = this._getRandomPauseInterval();
     this.pauseElapsedSec = 0.0;
-    this.rampTimeSec = 3.0; // 3 seconds to ramp down or ramp up
+    this.rampTimeSec = 3.0; // 3 seconds smooth deceleration/acceleration
     this.rampElapsedSec = 0.0;
     this.rampStartSpeedKmh = 0.0;
   }
 
   setTargetSpeed(speedKmh) {
     this.targetSpeedKmh = Math.max(0.5, parseFloat(speedKmh) || 4.0);
+    this.noiseTargetSpeedKmh = this.targetSpeedKmh;
     if (this.currentState === SimulationState.CRUISING) {
       this.currentSpeedKmh = this.targetSpeedKmh;
     }
@@ -44,9 +53,21 @@ export class SpeedVarianceEngine {
     return Math.random() * (this.maxPauseIntervalSec - this.minPauseIntervalSec) + this.minPauseIntervalSec;
   }
 
+  _pickNewNoiseTarget() {
+    if (!this.enableVariance) {
+      this.noiseTargetSpeedKmh = this.targetSpeedKmh;
+      return;
+    }
+    // Random factor between -varianceRangePct and +varianceRangePct
+    const factor = 1.0 + (Math.random() * 2 - 1) * this.varianceRangePct;
+    this.noiseTargetSpeedKmh = Math.max(0.5, this.targetSpeedKmh * factor);
+  }
+
   start() {
     this.currentState = SimulationState.CRUISING;
     this.currentSpeedKmh = this.targetSpeedKmh;
+    this.noiseTargetSpeedKmh = this.targetSpeedKmh;
+    this.timeSinceLastNoiseChangeSec = 0.0;
     this.timeSinceLastPauseSec = 0.0;
     this.nextPauseTimeSec = this._getRandomPauseInterval();
   }
@@ -68,15 +89,18 @@ export class SpeedVarianceEngine {
 
     switch (this.currentState) {
       case SimulationState.CRUISING:
-        // Calculate natural variance around target speed
-        if (this.enableVariance) {
-          const factor = 1.0 + (Math.random() * 2 - 1) * this.varianceRangePct;
-          this.currentSpeedKmh = Math.max(0.5, this.targetSpeedKmh * factor);
-        } else {
-          this.currentSpeedKmh = this.targetSpeedKmh;
+        // 1. Periodically pick a new noise target every ~6 seconds
+        this.timeSinceLastNoiseChangeSec += deltaSeconds;
+        if (this.timeSinceLastNoiseChangeSec >= this.noiseIntervalSec) {
+          this.timeSinceLastNoiseChangeSec = 0.0;
+          this._pickNewNoiseTarget();
         }
 
-        // Check if it's time for a periodic natural stop
+        // 2. Smooth exponential lerp towards noiseTargetSpeedKmh (smooth speed changes)
+        const lerpFactor = Math.min(1.0, deltaSeconds * 1.5);
+        this.currentSpeedKmh += (this.noiseTargetSpeedKmh - this.currentSpeedKmh) * lerpFactor;
+
+        // Check if it's time for a natural human pause/stop
         if (this.enableAutoPause && this.timeSinceLastPauseSec >= this.nextPauseTimeSec) {
           this.currentState = SimulationState.DECELERATING;
           this.rampStartSpeedKmh = this.currentSpeedKmh;

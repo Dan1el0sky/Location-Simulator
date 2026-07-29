@@ -1,5 +1,5 @@
 /**
- * OSRM Route Generator & Geocoder for Location Simulator v1.0.0
+ * OSRM Multi-Waypoint Route Generator & Search Engine for Location Simulator v1.0.0
  */
 
 export class RouteEngine {
@@ -9,18 +9,21 @@ export class RouteEngine {
   }
 
   /**
-   * Search address via Nominatim API
+   * Search address via Nominatim API with autocomplete results
    */
   async searchLocation(query) {
+    if (!query || query.trim().length < 2) return [];
+
     try {
-      const url = `${this.nominatimUrl}/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+      const url = `${this.nominatimUrl}/search?format=json&q=${encodeURIComponent(query)}&limit=6&addressdetails=1`;
       const response = await fetch(url, { headers: { 'User-Agent': 'LocationSimulator/1.0' } });
-      if (!response.ok) throw new Error('Location search network error');
+      if (!response.ok) throw new Error('Search network error');
       const results = await response.json();
       return results.map(item => ({
         displayName: item.display_name,
         lat: parseFloat(item.lat),
-        lng: parseFloat(item.lon)
+        lng: parseFloat(item.lon),
+        type: item.type || 'place'
       }));
     } catch (err) {
       console.error('[RouteEngine] Search failed:', err);
@@ -29,17 +32,17 @@ export class RouteEngine {
   }
 
   /**
-   * Calculate route polyline between coordinates array [ [lat, lon], [lat, lon] ]
-   * @param {Array} coordinatesArray Array of [lat, lon]
+   * Calculate route polyline between multiple coordinates array [ [lat, lon], [lat, lon], ... ]
+   * @param {Array} coordinatesArray Array of [lat, lon] waypoints
    * @param {string} profile 'foot' or 'car'
    */
   async getRoute(coordinatesArray, profile = 'foot') {
     if (!coordinatesArray || coordinatesArray.length < 2) {
-      throw new Error('At least 2 points are required for route calculation.');
+      throw new Error('At least 2 waypoints are required for route calculation.');
     }
 
     const osrmProfile = profile === 'car' ? 'driving' : 'foot';
-    // OSRM expects coordinates in lon,lat format
+    // OSRM expects coordinates in lon,lat format separated by semicolons
     const coordString = coordinatesArray.map(c => `${c[1]},${c[0]}`).join(';');
     const url = `${this.osrmBaseUrl}/${osrmProfile}/${coordString}?overview=full&geometries=geojson`;
 
@@ -50,7 +53,7 @@ export class RouteEngine {
       }
       const data = await response.json();
       if (!data.routes || data.routes.length === 0) {
-        throw new Error('No route found between selected points.');
+        throw new Error('No valid route found between selected waypoints.');
       }
 
       const primaryRoute = data.routes[0];
@@ -60,11 +63,11 @@ export class RouteEngine {
       return {
         distanceMeters: primaryRoute.distance,
         durationSeconds: primaryRoute.duration,
-        coordinates: pathCoordinates
+        coordinates: pathCoordinates,
+        waypoints: coordinatesArray
       };
     } catch (err) {
-      console.warn('[RouteEngine] OSRM API failed, creating straight line fallback:', err);
-      // Fallback straight-line polyline if OSRM is unreachable
+      console.warn('[RouteEngine] OSRM API failed, generating fallback polyline:', err);
       return this._generateStraightLineRoute(coordinatesArray);
     }
   }
@@ -77,7 +80,8 @@ export class RouteEngine {
     return {
       distanceMeters: totalDist,
       durationSeconds: totalDist / 1.388, // ~5 km/h estimate
-      coordinates: coords
+      coordinates: coords,
+      waypoints: coords
     };
   }
 
@@ -93,7 +97,7 @@ export class RouteEngine {
   }
 
   /**
-   * Given path coordinates and distance along route in meters, return exact interpolated lat/lng
+   * Interpolate exact position along polyline at distance targetDistanceMeters
    */
   interpolatePosition(coordinates, targetDistanceMeters) {
     if (!coordinates || coordinates.length === 0) return null;
@@ -119,7 +123,6 @@ export class RouteEngine {
       accumulatedDistance += segDistance;
     }
 
-    // Past final point
     const last = coordinates[coordinates.length - 1];
     return { lat: last[0], lng: last[1] };
   }

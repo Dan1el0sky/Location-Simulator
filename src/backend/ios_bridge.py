@@ -10,7 +10,6 @@ from step_calculator import StepCalculator
 
 logging.basicConfig(level=logging.INFO, format="[iOSBridge] %(asctime)s - %(levelname)s - %(message)s")
 
-# Version indicator matching app v1.0.0
 BRIDGE_VERSION = "1.0.0"
 WS_PORT = 8765
 
@@ -21,13 +20,14 @@ class IOSBridgeServer:
         self.device_connected = False
         self.device_info = {
             "connected": False,
-            "name": "No Device",
-            "ios_version": "N/A",
-            "udid": None
+            "name": "Checking USB...",
+            "ios_version": "iOS 12 - 26+",
+            "udid": None,
+            "status_text": "Checking USB connection..."
         }
         self.current_location = {"lat": 0.0, "lng": 0.0}
-        self.is_simulating = False
         self._pymobiledevice_available = False
+        self._lockdown_client = None
         self._check_dependencies()
 
     def _check_dependencies(self):
@@ -37,20 +37,19 @@ class IOSBridgeServer:
             logging.info("pymobiledevice3 successfully detected.")
         except ImportError:
             self._pymobiledevice_available = False
-            logging.warning("pymobiledevice3 not installed. Running in simulation API mode.")
+            logging.warning("pymobiledevice3 module not found. Running in high-speed Simulation Mode.")
 
     async def scan_usb_devices(self):
         """
         Scans USB usbmuxd bus for connected iOS devices.
         """
         if not self._pymobiledevice_available:
-            # Simulated connection check for development/preview
             self.device_info = {
                 "connected": False,
-                "name": "Searching USB...",
-                "ios_version": "iOS 12-26 Ready",
+                "name": "Simulation Mode",
+                "ios_version": "iOS 12 - 26+",
                 "udid": None,
-                "pymobiledevice_available": False
+                "status_text": "Ready (Simulation Mode)"
             }
             return self.device_info
 
@@ -59,63 +58,89 @@ class IOSBridgeServer:
             devices = list_devices()
             if devices:
                 dev = devices[0]
+                serial = getattr(dev, 'serial', '00008101-000000000000000')
                 self.device_connected = True
                 self.device_info = {
                     "connected": True,
-                    "name": getattr(dev, 'serial', 'iPhone (USB)'),
+                    "name": "iPhone Connected (USB)",
                     "ios_version": "iOS 12 - 26+",
-                    "udid": getattr(dev, 'serial', '00008101-000000000000000'),
-                    "pymobiledevice_available": True
+                    "udid": serial,
+                    "status_text": f"Connected ({serial[:8]}...)"
                 }
             else:
                 self.device_connected = False
                 self.device_info = {
                     "connected": False,
-                    "name": "No iPhone Connected via USB",
+                    "name": "No iPhone Connected",
                     "ios_version": "N/A",
                     "udid": None,
-                    "pymobiledevice_available": True
+                    "status_text": "Connect iPhone via USB cable"
                 }
         except Exception as e:
-            logging.error(f"Error scanning USB devices: {e}")
+            logging.debug(f"USB Scan check: {e}")
             self.device_connected = False
             self.device_info = {
                 "connected": False,
-                "name": f"USB Scan Error: {str(e)}",
+                "name": "USB usbmuxd Pending",
                 "ios_version": "N/A",
                 "udid": None,
-                "pymobiledevice_available": True
+                "status_text": "Waiting for iTunes/usbmux driver..."
             }
+
         return self.device_info
 
     async def set_location(self, lat, lng):
         """
-        Sends coordinates (lat, lng) to mounted iOS device via pymobiledevice3 or updates simulation state.
+        Sends coordinates (lat, lng) to mounted iOS device via pymobiledevice3.
         """
         self.current_location = {"lat": float(lat), "lng": float(lng)}
         
         if self._pymobiledevice_available and self.device_connected and self.device_info.get("udid"):
             try:
-                # Attempt sending location via pymobiledevice3 services
                 from pymobiledevice3.lockdown import create_using_usbmux
                 from pymobiledevice3.services.dvt.dvt_secure_socket_client import DvtSecureSocketClient
                 from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
 
-                lockdown = create_using_usbmux(udid=self.device_info["udid"])
-                with DvtSecureSocketClient(lockdown) as dvt:
+                if not self._lockdown_client:
+                    self._lockdown_client = create_using_usbmux(udid=self.device_info["udid"])
+
+                with DvtSecureSocketClient(self._lockdown_client) as dvt:
                     sim = LocationSimulation(dvt)
                     sim.set(float(lat), float(lng))
-                    logging.info(f"Pushed to iOS Device ({self.device_info['udid']}): {lat}, {lng}")
+                    logging.info(f"Pushed Location to iPhone ({self.device_info['udid']}): {lat:.6f}, {lng:.6f}")
             except Exception as e:
-                logging.debug(f"Direct dvt location call notice: {e}")
+                # Reset cached client on error so it reconnects on next tick
+                self._lockdown_client = None
+                logging.debug(f"Location push notice: {e}")
 
         return {"status": "ok", "lat": lat, "lng": lng}
 
+    async def background_usb_monitor(self):
+        """
+        Background task that checks USB connection every 1.5 seconds and broadcasts updates to clients.
+        """
+        last_status = None
+        while True:
+            try:
+                dev_info = await self.scan_usb_devices()
+                current_status = json.dumps(dev_info)
+                if current_status != last_status and self.connected_clients:
+                    last_status = current_status
+                    broadcast_msg = json.dumps({
+                        "type": "DEVICE_STATUS",
+                        "device": dev_info
+                    })
+                    await asyncio.gather(*[client.send(broadcast_msg) for client in self.connected_clients if client.open])
+            except Exception as e:
+                logging.debug(f"Background USB monitor exception: {e}")
+
+            await asyncio.sleep(1.5)
+
     async def handle_client(self, websocket):
         self.connected_clients.add(websocket)
-        logging.info(f"Client connected. Total clients: {len(self.connected_clients)}")
+        logging.info(f"Client connected. Active clients: {len(self.connected_clients)}")
 
-        # Send initial status
+        # Send initial status immediately
         await websocket.send(json.dumps({
             "type": "INIT_STATUS",
             "version": BRIDGE_VERSION,
@@ -174,6 +199,10 @@ class IOSBridgeServer:
 async def main():
     bridge = IOSBridgeServer()
     logging.info(f"Starting Location Simulator iOS Bridge v{BRIDGE_VERSION} on ws://localhost:{WS_PORT}...")
+    
+    # Launch background USB scanner task
+    asyncio.create_task(bridge.background_usb_monitor())
+
     async with websockets.serve(bridge.handle_client, "127.0.0.1", WS_PORT):
         await asyncio.Future()  # Keep running
 

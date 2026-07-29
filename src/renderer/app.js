@@ -9,18 +9,28 @@ class LocationSimulatorApp {
     this.speedEngine = new SpeedVarianceEngine();
 
     // Map markers & polylines
-    this.startMarker = null;
-    this.endMarker = null;
+    this.waypointMarkers = []; // Array of L.marker
     this.userMarker = null;
     this.routePolyline = null;
     
+    // Multi-waypoint coordinates array [[lat, lng], [lat, lng], ...]
+    this.waypoints = [];
+
     // Route state
     this.routeData = null; // { distanceMeters, durationSeconds, coordinates }
     this.traversedDistanceMeters = 0.0;
+    this.calculatedSteps = 0;
     this.isSimulating = false;
     this.isPaused = false;
+    this.loopRoute = false;
     this.animationTimer = null;
     this.lastTickTimestamp = 0;
+
+    // UI Damping timer for readable speed display
+    this.lastUiSpeedUpdate = 0;
+
+    // Search debouncer
+    this.searchDebounceTimer = null;
 
     // Default map center (London fallback before IP location fetch)
     this.currentCenter = { lat: 51.505, lng: -0.09 };
@@ -46,8 +56,7 @@ class LocationSimulatorApp {
 
       this.ws.onopen = () => {
         console.log('[WS] Connected to Python iOS bridge server.');
-        this.updateDeviceStatus('Connected to Bridge', 'connected');
-        // Request device scan
+        this.updateDeviceStatus('Checking USB...', 'connected');
         this.ws.send(jsonStr({ type: 'SCAN_DEVICES' }));
       };
 
@@ -57,8 +66,8 @@ class LocationSimulatorApp {
       };
 
       this.ws.onerror = (err) => {
-        console.warn('[WS] Bridge connection error:', err);
-        this.updateDeviceStatus('Simulation Mode (No Bridge)', 'disconnected');
+        console.warn('[WS] Bridge connection notice:', err);
+        this.updateDeviceStatus('Ready (Simulation Mode)', 'disconnected');
       };
 
       this.ws.onclose = () => {
@@ -68,7 +77,7 @@ class LocationSimulatorApp {
       };
     } catch (e) {
       console.warn('[WS] Could not establish websocket:', e);
-      this.updateDeviceStatus('Simulation Mode', 'disconnected');
+      this.updateDeviceStatus('Ready (Simulation Mode)', 'disconnected');
     }
   }
 
@@ -79,14 +88,16 @@ class LocationSimulatorApp {
         if (msg.device && msg.device.connected) {
           this.updateDeviceStatus(`🟢 ${msg.device.name} (${msg.device.ios_version})`, 'connected');
         } else if (msg.device) {
-          this.updateDeviceStatus(`📱 ${msg.device.name}`, 'disconnected');
+          const statusText = msg.device.status_text || msg.device.name;
+          this.updateDeviceStatus(`📱 ${statusText}`, 'disconnected');
         }
         break;
 
       case 'STEP_UPDATE':
-        const stepsElement = document.getElementById('telemetry-steps');
-        if (stepsElement) {
-          stepsElement.innerText = `${msg.total_steps.toLocaleString()} steps`;
+        // Sync steps from Python backend if higher
+        if (msg.total_steps && msg.total_steps > this.calculatedSteps) {
+          this.calculatedSteps = msg.total_steps;
+          this.updateStepsUI();
         }
         break;
     }
@@ -122,18 +133,17 @@ class LocationSimulatorApp {
 
     L.control.zoom({ position: 'topright' }).addTo(this.map);
 
-    // Click to add Start / End markers
+    // Click map to add waypoints
     this.map.on('click', (e) => this.handleMapClick(e));
   }
 
   async fetchInitialLocation() {
-    // 1. Try Browser Geolocation API
     if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           this.currentCenter = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           this.map.setView([this.currentCenter.lat, this.currentCenter.lng], 15);
-          this.setStartMarker(this.currentCenter.lat, this.currentCenter.lng);
+          this.addWaypoint(this.currentCenter.lat, this.currentCenter.lng);
         },
         async () => {
           console.log('[Geolocation] Denied/Disabled. Falling back to IP Geolocation...');
@@ -152,10 +162,10 @@ class LocationSimulatorApp {
       if (res.ok) {
         const data = await res.json();
         if (data.latitude && data.longitude) {
-          console.log(`[IP Geolocation] Estimated location: ${data.city}, ${data.country_name}`);
+          console.log(`[IP Geolocation] Location: ${data.city}, ${data.country_name}`);
           this.currentCenter = { lat: data.latitude, lng: data.longitude };
           this.map.setView([this.currentCenter.lat, this.currentCenter.lng], 14);
-          this.setStartMarker(this.currentCenter.lat, this.currentCenter.lng);
+          this.addWaypoint(this.currentCenter.lat, this.currentCenter.lng);
           return;
         }
       }
@@ -165,98 +175,131 @@ class LocationSimulatorApp {
   }
 
   /* --------------------------------------------------------------------------
-     Marker & Route Management
+     Multi-Waypoint Route Management
      -------------------------------------------------------------------------- */
   handleMapClick(e) {
     if (this.isSimulating) return;
-
     const { lat, lng } = e.latlng;
+    this.addWaypoint(lat, lng);
+  }
 
-    if (!this.startMarker) {
-      this.setStartMarker(lat, lng);
-    } else if (!this.endMarker) {
-      this.setEndMarker(lat, lng);
-      this.calculateAndDrawRoute();
-    } else {
-      // Reset & set new start
-      this.clearRoute();
-      this.setStartMarker(lat, lng);
+  async addWaypoint(lat, lng) {
+    this.waypoints.push([lat, lng]);
+
+    // Create marker
+    const index = this.waypoints.length;
+    const isStart = index === 1;
+    const color = isStart ? '#10b981' : '#f43f5e';
+    const label = isStart ? 'Start Point' : `Waypoint ${index - 1}`;
+
+    const pinIcon = L.divIcon({
+      className: 'custom-pin-waypoint',
+      html: `<div style="background:${color}; width:18px; height:18px; border-radius:50%; border:3px solid #fff; box-shadow: 0 0 10px ${color}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:bold;">${index}</div>`,
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
+    });
+
+    const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(this.map);
+    marker.bindPopup(`<b>${label}</b>`);
+    this.waypointMarkers.push(marker);
+
+    if (this.waypoints.length >= 2) {
+      await this.calculateAndDrawRoute();
     }
   }
 
-  setStartMarker(lat, lng) {
-    if (this.startMarker) this.map.removeLayer(this.startMarker);
-    const startIcon = L.divIcon({
-      className: 'custom-pin-start',
-      html: '<div style="background:#10b981; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow: 0 0 10px #10b981;"></div>',
-      iconSize: [16, 16]
-    });
-    this.startMarker = L.marker([lat, lng], { icon: startIcon }).addTo(this.map);
-    this.startMarker.bindPopup('<b>Start Point</b>').openPopup();
-  }
-
-  setEndMarker(lat, lng) {
-    if (this.endMarker) this.map.removeLayer(this.endMarker);
-    const endIcon = L.divIcon({
-      className: 'custom-pin-end',
-      html: '<div style="background:#f43f5e; width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow: 0 0 10px #f43f5e;"></div>',
-      iconSize: [16, 16]
-    });
-    this.endMarker = L.marker([lat, lng], { icon: endIcon }).addTo(this.map);
-    this.endMarker.bindPopup('<b>End Point</b>').openPopup();
-  }
-
   async calculateAndDrawRoute() {
-    if (!this.startMarker || !this.endMarker) return;
+    if (this.waypoints.length < 2) return;
 
-    const start = this.startMarker.getLatLng();
-    const end = this.endMarker.getLatLng();
     const profile = document.getElementById('route-profile-select').value;
 
     try {
-      this.routeData = await this.routeEngine.getRoute([
-        [start.lat, start.lng],
-        [end.lat, end.lng]
-      ], profile);
+      this.routeData = await this.routeEngine.getRoute(this.waypoints, profile);
 
       if (this.routePolyline) this.map.removeLayer(this.routePolyline);
 
       this.routePolyline = L.polyline(this.routeData.coordinates, {
         color: '#06b6d4',
         weight: 5,
-        opacity: 0.8,
-        dashArray: '10, 10'
+        opacity: 0.85,
+        dashArray: '8, 8'
       }).addTo(this.map);
 
       this.map.fitBounds(this.routePolyline.getBounds(), { padding: [40, 40] });
 
-      console.log(`[Route] Found path distance: ${(this.routeData.distanceMeters / 1000).toFixed(2)} km`);
+      this.updateRouteStatsPreview();
     } catch (e) {
-      alert(`Route Calculation Error: ${e.message}`);
+      console.error('[Route] Calculation error:', e);
     }
   }
 
+  updateRouteStatsPreview() {
+    const previewBox = document.getElementById('route-stats-preview');
+    if (!this.routeData) {
+      if (previewBox) previewBox.style.display = 'none';
+      return;
+    }
+
+    if (previewBox) previewBox.style.display = 'block';
+
+    const distKm = (this.routeData.distanceMeters / 1000.0).toFixed(2);
+    const speedKmh = this.speedEngine.targetSpeedKmh;
+    const durationMin = Math.round((this.routeData.distanceMeters / 1000.0 / speedKmh) * 60);
+
+    const elDist = document.getElementById('preview-distance');
+    const elDur = document.getElementById('preview-duration');
+    const elCount = document.getElementById('preview-waypoints-count');
+    const elMode = document.getElementById('preview-mode');
+
+    if (elDist) elDist.innerText = `${distKm} km`;
+    if (elDur) elDur.innerText = `${durationMin} min`;
+    if (elCount) elCount.innerText = `${this.waypoints.length}`;
+    if (elMode) elMode.innerText = this.loopRoute ? 'Loop Active' : 'Loop Off';
+  }
+
+  reverseRoute() {
+    if (this.waypoints.length < 2 || this.isSimulating) return;
+    this.waypoints.reverse();
+    this.redrawAllWaypoints();
+    this.calculateAndDrawRoute();
+  }
+
   clearRoute() {
-    if (this.startMarker) { this.map.removeLayer(this.startMarker); this.startMarker = null; }
-    if (this.endMarker) { this.map.removeLayer(this.endMarker); this.endMarker = null; }
+    this.waypointMarkers.forEach(m => this.map.removeLayer(m));
+    this.waypointMarkers = [];
+    this.waypoints = [];
     if (this.userMarker) { this.map.removeLayer(this.userMarker); this.userMarker = null; }
     if (this.routePolyline) { this.map.removeLayer(this.routePolyline); this.routePolyline = null; }
     this.routeData = null;
     this.traversedDistanceMeters = 0.0;
+    this.calculatedSteps = 0;
+    this.updateRouteStatsPreview();
+    this.updateTelemetryUI(0.0, SimulationState.STOPPED);
+    this.updateStepsUI();
+  }
+
+  redrawAllWaypoints() {
+    this.waypointMarkers.forEach(m => this.map.removeLayer(m));
+    this.waypointMarkers = [];
+
+    const coords = [...this.waypoints];
+    this.waypoints = [];
+    coords.forEach(c => this.addWaypoint(c[0], c[1]));
   }
 
   /* --------------------------------------------------------------------------
      Simulation Engine Loop
      -------------------------------------------------------------------------- */
   startSimulation() {
-    if (!this.routeData) {
-      alert('Please select both a Start and End point on the map to create a route first.');
+    if (!this.routeData || this.waypoints.length < 2) {
+      alert('Please select at least 2 waypoints on the map to create a route first.');
       return;
     }
 
     this.isSimulating = true;
     this.isPaused = false;
     this.traversedDistanceMeters = 0.0;
+    this.calculatedSteps = 0;
     this.speedEngine.start();
 
     // Spawn animated user position pin
@@ -271,6 +314,7 @@ class LocationSimulatorApp {
 
     this.updateDeviceStatus('Spoofing Active', 'simulating');
     this.updateControlsUI();
+    this.updateStepsUI();
 
     // Reset step counter in Python
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -288,10 +332,10 @@ class LocationSimulatorApp {
     this.lastTickTimestamp = timestamp;
 
     if (!this.isPaused) {
-      // 1. Tick speed engine to get current speed (km/h) accounting for variance & auto pause
+      // 1. Tick speed engine for smooth speed (km/h) with natural variance & auto pause
       const { speedKmh, state } = this.speedEngine.tick(deltaSec);
 
-      // 2. Convert speed (km/h) to meters traversed in deltaSec
+      // 2. Meters traversed in deltaSec
       const speedMs = (speedKmh * 1000.0) / 3600.0;
       const distDelta = speedMs * deltaSec;
 
@@ -299,12 +343,19 @@ class LocationSimulatorApp {
       this.traversedDistanceMeters += distDelta;
       const currPos = this.routeEngine.interpolatePosition(this.routeData.coordinates, this.traversedDistanceMeters);
 
-      // 3. Update map marker
+      // 3. Instant Step Calculation Client-side (~0.75m average stride length)
+      if (distDelta > 0) {
+        const stepIncrement = distDelta / 0.75;
+        this.calculatedSteps += stepIncrement;
+        this.updateStepsUI();
+      }
+
+      // 4. Update map marker & pan camera smoothly
       if (currPos && this.userMarker) {
         this.userMarker.setLatLng([currPos.lat, currPos.lng]);
-        this.map.panTo([currPos.lat, currPos.lng], { animate: true, duration: 0.2 });
+        this.map.panTo([currPos.lat, currPos.lng], { animate: true, duration: 0.1 });
 
-        // Push position update to iOS USB backend
+        // Push position to Python backend for USB device
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(jsonStr({
             type: 'SET_LOCATION',
@@ -312,7 +363,6 @@ class LocationSimulatorApp {
             lng: currPos.lng
           }));
 
-          // Send step math update
           if (prevPos) {
             this.ws.send(jsonStr({
               type: 'UPDATE_STEP_MATH',
@@ -325,19 +375,38 @@ class LocationSimulatorApp {
         }
       }
 
-      // 4. Update Telemetry UI
-      this.updateTelemetryUI(speedKmh, state);
+      // 5. Update Telemetry UI (Damped at 2Hz for clean readability)
+      if (timestamp - this.lastUiSpeedUpdate > 400) {
+        this.lastUiSpeedUpdate = timestamp;
+        this.updateTelemetryUI(speedKmh, state);
+      }
 
-      // Check route completion
+      // 6. Check route completion or looping
       if (this.traversedDistanceMeters >= this.routeData.distanceMeters) {
-        console.log('[Simulation] Route completed!');
-        this.stopSimulation();
-        alert('🎉 Route Simulation Completed!');
-        return;
+        if (this.loopRoute) {
+          console.log('[Simulation] Loop Route enabled. Reversing route...');
+          this.waypoints.reverse();
+          this.redrawAllWaypoints();
+          this.calculateAndDrawRoute().then(() => {
+            this.traversedDistanceMeters = 0.0;
+          });
+        } else {
+          console.log('[Simulation] Route completed!');
+          this.stopSimulation();
+          alert('🎉 Route Simulation Completed!');
+          return;
+        }
       }
     }
 
     this.animationTimer = requestAnimationFrame((ts) => this.simulationTick(ts));
+  }
+
+  updateStepsUI() {
+    const stepsElement = document.getElementById('telemetry-steps');
+    if (stepsElement) {
+      stepsElement.innerText = `${Math.floor(this.calculatedSteps).toLocaleString()} steps`;
+    }
   }
 
   pauseSimulation() {
@@ -360,10 +429,10 @@ class LocationSimulatorApp {
   }
 
   /* --------------------------------------------------------------------------
-     UI Bindings & Event Listeners
+     Search Autocomplete & UI Event Bindings
      -------------------------------------------------------------------------- */
   bindEvents() {
-    // Preset speed buttons
+    // Speed Preset Buttons
     const presetBtns = document.querySelectorAll('.preset-btn');
     presetBtns.forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -374,6 +443,7 @@ class LocationSimulatorApp {
         document.getElementById('manual-speed-input').value = speed;
         document.getElementById('speed-val-display').innerText = `${speed.toFixed(1)} km/h`;
         this.speedEngine.setTargetSpeed(speed);
+        this.updateRouteStatsPreview();
       });
     });
 
@@ -383,7 +453,17 @@ class LocationSimulatorApp {
       const speed = parseFloat(e.target.value) || 4.0;
       document.getElementById('speed-val-display').innerText = `${speed.toFixed(1)} km/h`;
       this.speedEngine.setTargetSpeed(speed);
+      this.updateRouteStatsPreview();
     });
+
+    // Route Profile Select
+    document.getElementById('route-profile-select').addEventListener('change', () => {
+      if (this.waypoints.length >= 2) this.calculateAndDrawRoute();
+    });
+
+    // Reverse & Clear Buttons
+    document.getElementById('btn-reverse-route').addEventListener('click', () => this.reverseRoute());
+    document.getElementById('btn-clear-route').addEventListener('click', () => this.clearRoute());
 
     // Humanizer Toggles & Sliders
     document.getElementById('speed-variance-toggle').addEventListener('change', (e) => {
@@ -394,6 +474,11 @@ class LocationSimulatorApp {
       this.speedEngine.enableAutoPause = e.target.checked;
       const panel = document.getElementById('pause-settings-panel');
       if (panel) panel.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.getElementById('loop-route-toggle').addEventListener('change', (e) => {
+      this.loopRoute = e.target.checked;
+      this.updateRouteStatsPreview();
     });
 
     document.getElementById('pause-interval-slider').addEventListener('input', (e) => {
@@ -409,21 +494,29 @@ class LocationSimulatorApp {
       document.getElementById('stop-duration-val').innerText = `${val} sec`;
     });
 
-    // Search bar input
+    // Search Autocomplete Input
     const searchInput = document.getElementById('search-input');
-    searchInput.addEventListener('keypress', async (e) => {
-      if (e.key === 'Enter') {
-        const query = searchInput.value.trim();
-        if (query) {
-          const results = await this.routeEngine.searchLocation(query);
-          if (results.length > 0) {
-            const loc = results[0];
-            this.map.setView([loc.lat, loc.lng], 15);
-            this.setStartMarker(loc.lat, loc.lng);
-          } else {
-            alert('Location not found.');
-          }
-        }
+    const dropdown = document.getElementById('search-results-dropdown');
+
+    searchInput.addEventListener('input', (e) => {
+      clearTimeout(this.searchDebounceTimer);
+      const query = e.target.value.trim();
+
+      if (query.length < 2) {
+        if (dropdown) dropdown.style.display = 'none';
+        return;
+      }
+
+      this.searchDebounceTimer = setTimeout(async () => {
+        const results = await this.routeEngine.searchLocation(query);
+        this.renderSearchResults(results);
+      }, 300);
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#search-input') && !e.target.closest('#search-results-dropdown')) {
+        if (dropdown) dropdown.style.display = 'none';
       }
     });
 
@@ -431,6 +524,36 @@ class LocationSimulatorApp {
     document.getElementById('btn-start-simulation').addEventListener('click', () => this.startSimulation());
     document.getElementById('btn-pause-simulation').addEventListener('click', () => this.pauseSimulation());
     document.getElementById('btn-stop-simulation').addEventListener('click', () => this.stopSimulation());
+  }
+
+  renderSearchResults(results) {
+    const dropdown = document.getElementById('search-results-dropdown');
+    if (!dropdown) return;
+
+    if (!results || results.length === 0) {
+      dropdown.style.display = 'none';
+      return;
+    }
+
+    dropdown.innerHTML = results.map(item => `
+      <div class="search-dropdown-item" data-lat="${item.lat}" data-lng="${item.lng}">
+        📍 ${item.displayName}
+      </div>
+    `).join('');
+
+    dropdown.style.display = 'block';
+
+    // Click item handler
+    dropdown.querySelectorAll('.search-dropdown-item').forEach(el => {
+      el.addEventListener('click', (e) => {
+        const lat = parseFloat(e.currentTarget.dataset.lat);
+        const lng = parseFloat(e.currentTarget.dataset.lng);
+        dropdown.style.display = 'none';
+        document.getElementById('search-input').value = '';
+        this.map.setView([lat, lng], 16);
+        this.addWaypoint(lat, lng);
+      });
+    });
   }
 
   updateControlsUI() {
@@ -468,7 +591,6 @@ function jsonStr(obj) {
   return JSON.stringify(obj);
 }
 
-// Instantiate App when DOM loads
 window.addEventListener('DOMContentLoaded', () => {
   window.app = new LocationSimulatorApp();
 });

@@ -29,7 +29,7 @@
 
       <div class="status-badge" id="device-status-badge">
         <span class="status-dot" id="status-indicator-dot"></span>
-        <span id="device-status-text">Scanning USB...</span>
+        <span id="device-status-text">Checking USB connection...</span>
       </div>
     </header>
 
@@ -40,23 +40,47 @@
       <aside class="control-sidebar">
         
         <!-- Search & Waypoint Section -->
-        <div class="card-section">
-          <div class="section-title">📍 Location & Route</div>
-          <div class="input-group">
+        <div class="card-section" style="position: relative;">
+          <div class="section-title">📍 Location & Multi-Waypoint Route</div>
+          
+          <div class="input-group" style="position: relative;">
             <span class="input-label">Search Location</span>
-            <input type="text" id="search-input" class="input-field" placeholder="Search address or city...">
+            <input type="text" id="search-input" class="input-field" placeholder="Search address, park, or city..." autocomplete="off">
+            <!-- Autocomplete Suggestions List -->
+            <div id="search-results-dropdown" class="search-dropdown"></div>
           </div>
 
-          <div class="input-group">
-            <span class="input-label">Route Profile</span>
-            <select id="route-profile-select" class="input-field">
-              <option value="foot" selected>🚶 Foot (Walking / Running)</option>
-              <option value="car">🚗 Car (Driving)</option>
-            </select>
+          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+            <div class="input-group" style="flex: 1; margin-bottom: 0;">
+              <span class="input-label">Profile</span>
+              <select id="route-profile-select" class="input-field">
+                <option value="foot" selected>🚶 Foot (Walk/Run)</option>
+                <option value="car">🚗 Car (Driving)</option>
+              </select>
+            </div>
+
+            <button id="btn-reverse-route" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Reverse Route Direction">
+              🔄 Reverse
+            </button>
+            
+            <button id="btn-clear-route" class="btn-secondary btn-danger" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Clear All Waypoints">
+              🗑️ Clear
+            </button>
+          </div>
+
+          <!-- Route Preview Stats Box -->
+          <div id="route-stats-preview" class="route-stats-box" style="display: none;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+              <span><b>Path Distance:</b> <span id="preview-distance">0.00 km</span></span>
+              <span><b>Est. Time:</b> <span id="preview-duration">0 min</span></span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted);">
+              Waypoints: <span id="preview-waypoints-count">0</span> | Mode: <span id="preview-mode">Loop Disabled</span>
+            </div>
           </div>
           
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">
-            💡 Click on map to set <b>Start</b> and <b>End</b> points.
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+            💡 Click on map to add waypoints: <b>1st = Start</b>, <b>2nd = End</b> (click more to add intermediate waypoints).
           </div>
         </div>
 
@@ -104,11 +128,11 @@
           <div class="section-title">🎲 Humanized Variance</div>
           
           <div class="toggle-row">
-            <span style="font-size: 13px;">Dynamic Speed Variation</span>
+            <span style="font-size: 13px;">Smooth Speed Fluctuation</span>
             <input type="checkbox" id="speed-variance-toggle" class="toggle-switch" checked>
           </div>
           <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 8px;">
-            Simulates organic speed noise (±20%) to prevent detection.
+            Smoothly varies speed (±20% noise every 6s) to mimic real walking.
           </div>
 
           <div class="toggle-row">
@@ -132,6 +156,11 @@
               </span>
               <input type="range" id="stop-duration-slider" class="range-slider" min="2" max="30" step="1" value="5">
             </div>
+          </div>
+
+          <div class="toggle-row" style="margin-top: 6px;">
+            <span style="font-size: 13px;">Loop Route Automatically</span>
+            <input type="checkbox" id="loop-route-toggle" class="toggle-switch">
           </div>
         </div>
 
