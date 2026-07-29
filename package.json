@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "description": "Windows Desktop iOS Location Simulator with Humanized Movement & Step Counter for Pokémon GO & Pikmin Bloom",
   "type": "module",
-  "main": "src/main/index.js",
+  "main": "dist-electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron .",
+    "dev": "vite",
     "test": "node tests/run-tests.js",
-    "build": "electron-builder --win"
+    "build": "tsc && vite build && electron-builder",
+    "build:win": "tsc && vite build && electron-builder --win"
   },
   "keywords": [
     "location-simulator",
@@ -22,9 +23,52 @@
   "author": "Dan1el0sky",
   "license": "MIT",
   "dependencies": {
+    "@mapbox/polyline": "^1.2.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/mapbox__polyline": "^1.0.5",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^1.27.0",
+    "polyline": "^0.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-leaflet": "^5.0.0",
+    "vite-plugin-electron": "^1.1.0",
+    "vite-plugin-electron-renderer": "^1.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5"
+  },
+  "build": {
+    "appId": "com.location.simulator",
+    "productName": "Location Simulator",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "extraResources": [
+      {
+        "from": "src/backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }
