@@ -1,0 +1,20 @@
+npm warn exec The following package was not found and will be installed: serve@14.2.6
+ INFO  Accepting connections at http://localhost:5173
+ HTTP  7/29/2026 9:23:10 PM ::1 GET /
+ HTTP  7/29/2026 9:23:10 PM ::1 Returned 200 in 292 ms
+ HTTP  7/29/2026 9:23:11 PM ::1 GET /assets/index-D34p22ze.js
+ HTTP  7/29/2026 9:23:11 PM ::1 GET /assets/index-CW7wMbRL.css
+ HTTP  7/29/2026 9:23:11 PM ::1 Returned 200 in 16 ms
+ HTTP  7/29/2026 9:23:11 PM ::1 Returned 200 in 22 ms
+ HTTP  7/29/2026 9:24:17 PM ::1 GET /
+ HTTP  7/29/2026 9:24:17 PM ::1 Returned 200 in 2 ms
+ HTTP  7/29/2026 9:24:17 PM ::1 GET /assets/index-D34p22ze.js
+ HTTP  7/29/2026 9:24:17 PM ::1 GET /assets/index-CW7wMbRL.css
+ HTTP  7/29/2026 9:24:17 PM ::1 Returned 200 in 2 ms
+ HTTP  7/29/2026 9:24:17 PM ::1 Returned 200 in 2 ms
+ HTTP  7/29/2026 9:25:45 PM ::1 GET /
+ HTTP  7/29/2026 9:25:45 PM ::1 Returned 200 in 2 ms
+ HTTP  7/29/2026 9:25:45 PM ::1 GET /assets/index-6cdQdTYw.js
+ HTTP  7/29/2026 9:25:45 PM ::1 GET /assets/index-CW7wMbRL.css
+ HTTP  7/29/2026 9:25:45 PM ::1 Returned 200 in 4 ms
+ HTTP  7/29/2026 9:25:45 PM ::1 Returned 200 in 7 ms
