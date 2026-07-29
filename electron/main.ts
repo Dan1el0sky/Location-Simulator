@@ -14,10 +14,11 @@ const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
 function startPythonBackend() {
   const isDev = !app.isPackaged;
-  // In development, the script is in src/backend
-  // In production, the script is in resources/backend (configured via extraResources)
+
+  // In Vite dev, __dirname is `dist-electron`.
+  // We need to go up one directory to project root, then down to src/backend.
   const scriptPath = isDev
-    ? path.join(__dirname, '../../src/backend/ios_bridge.py')
+    ? path.join(__dirname, '../src/backend/ios_bridge.py')
     : path.join(process.resourcesPath, 'backend/ios_bridge.py');
 
   const pythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
