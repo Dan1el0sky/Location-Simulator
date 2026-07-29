@@ -61,9 +61,14 @@ pip install -r src/backend/requirements.txt
 
 ### Running the Application
 
+Double-click `start.bat` in the project folder, or run in terminal:
+
 ```bash
-# Start in development mode
-npm run dev
+# Start via batch launcher
+start.bat
+
+# Or start via npm
+npm start
 ```
 
 ---
