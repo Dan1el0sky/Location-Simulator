@@ -473,6 +473,10 @@ class LocationSimulatorApp {
     this.speedEngine.stop();
     if (this.animationTimer) cancelAnimationFrame(this.animationTimer);
 
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(jsonStr({ type: 'STOP_SIMULATION' }));
+    }
+
     this.updateDeviceStatus('Connected to Bridge', 'connected');
     this.updateControlsUI();
     this.updateTelemetryUI(0.0, SimulationState.STOPPED);

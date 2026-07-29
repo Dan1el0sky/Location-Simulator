@@ -27,8 +27,8 @@ class IOSBridgeServer:
             "status_text": "Connect iPhone via USB cable"
         }
         self.current_location = {"lat": 0.0, "lng": 0.0}
-        self._pymobiledevice_available = True
-        self._lockdown_client = None
+        self._active_sim_proc = None
+        self._last_pushed_location = (0.0, 0.0)
 
     async def scan_usb_devices(self):
         """
@@ -43,7 +43,7 @@ class IOSBridgeServer:
                 self.device_connected = True
                 self.device_info = {
                     "connected": True,
-                    "name": "iPhone Connected (USB)",
+                    "name": f"iPhone Connected ({serial[:8]}...)",
                     "ios_version": "iOS 12 - 26+",
                     "udid": serial,
                     "status_text": f"🟢 Connected ({serial[:8]}...)"
@@ -74,48 +74,61 @@ class IOSBridgeServer:
         """
         Sends coordinates (lat, lng) to mounted iOS device via pymobiledevice3.
         """
-        self.current_location = {"lat": float(lat), "lng": float(lng)}
-        
+        lat_f = float(lat)
+        lng_f = float(lng)
+        self.current_location = {"lat": lat_f, "lng": lng_f}
+
         if self.device_connected and self.device_info.get("udid"):
             udid = self.device_info["udid"]
-            pushed = False
 
-            # Method 1: Direct DVT LocationSimulation Service
-            try:
-                from pymobiledevice3.lockdown import create_using_usbmux
-                from pymobiledevice3.services.dvt.dvt_secure_socket_client import DvtSecureSocketClient
-                from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+            # Only spawn new process if location changed significantly (>0.5m)
+            dist_moved = abs(lat_f - self._last_pushed_location[0]) + abs(lng_f - self._last_pushed_location[1])
+            if dist_moved > 0.000005 or self._active_sim_proc is None:
+                self._last_pushed_location = (lat_f, lng_f)
+                
+                # Terminate previous location process if active
+                if self._active_sim_proc and self._active_sim_proc.returncode is None:
+                    try:
+                        self._active_sim_proc.terminate()
+                    except Exception:
+                        pass
 
-                if not self._lockdown_client:
-                    self._lockdown_client = create_using_usbmux(udid=udid)
-
-                with DvtSecureSocketClient(self._lockdown_client) as dvt:
-                    sim = LocationSimulation(dvt)
-                    sim.set(float(lat), float(lng))
-                    logging.info(f"Pushed Location to iPhone ({udid}): {lat:.6f}, {lng:.6f}")
-                    pushed = True
-            except Exception as e:
-                self._lockdown_client = None
-                logging.debug(f"Method 1 location push notice: {e}")
-
-            # Method 2: CLI Subprocess Fallback (handles iOS 17+ DVT RSD auto-tunnels)
-            if not pushed:
                 try:
                     cmd = [
                         sys.executable, "-m", "pymobiledevice3",
                         "developer", "dvt", "simulate-location", "set",
-                        "--lat", str(lat), "--lon", str(lng)
+                        "--", str(lat_f), str(lng_f)
                     ]
-                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
-                    if proc.returncode == 0:
-                        logging.info(f"CLI Pushed Location to iPhone ({udid}): {lat:.6f}, {lng:.6f}")
-                        pushed = True
-                    else:
-                        logging.warning(f"CLI Location push stderr: {proc.stderr.strip()}")
+                    self._active_sim_proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True
+                    )
+                    logging.info(f"🟢 Location Pushed to iPhone ({udid}): {lat_f:.6f}, {lng_f:.6f}")
                 except Exception as ex:
-                    logging.debug(f"Method 2 location push notice: {ex}")
+                    logging.error(f"Error executing simulate-location: {ex}")
 
-        return {"status": "ok", "lat": lat, "lng": lng}
+        return {"status": "ok", "lat": lat_f, "lng": lng_f}
+
+    async def clear_location(self):
+        """
+        Clears location simulation on device.
+        """
+        if self._active_sim_proc:
+            try:
+                self._active_sim_proc.terminate()
+            except Exception:
+                pass
+            self._active_sim_proc = None
+
+        if self.device_connected:
+            try:
+                cmd = [sys.executable, "-m", "pymobiledevice3", "developer", "dvt", "simulate-location", "clear"]
+                subprocess.run(cmd, timeout=3)
+                logging.info("Location simulation cleared on iPhone.")
+            except Exception:
+                pass
 
     async def background_usb_monitor(self):
         """
@@ -191,6 +204,9 @@ class IOSBridgeServer:
                         "total_steps": 0,
                         "total_distance_meters": 0.0
                     }))
+
+                elif msg_type == "STOP_SIMULATION":
+                    await self.clear_location()
 
         except websockets.exceptions.ConnectionClosed:
             logging.info("Client connection closed.")
