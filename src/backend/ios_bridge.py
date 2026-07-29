@@ -24,46 +24,19 @@ class IOSBridgeServer:
             "name": "Checking USB...",
             "ios_version": "iOS 12 - 26+",
             "udid": None,
-            "status_text": "Checking USB connection..."
+            "status_text": "Connect iPhone via USB cable"
         }
         self.current_location = {"lat": 0.0, "lng": 0.0}
-        self._pymobiledevice_available = False
+        self._pymobiledevice_available = True
         self._lockdown_client = None
-        self._check_dependencies()
-
-    def _check_dependencies(self):
-        try:
-            import pymobiledevice3
-            self._pymobiledevice_available = True
-            logging.info("pymobiledevice3 successfully detected.")
-        except ImportError:
-            logging.info("pymobiledevice3 module missing. Attempting auto-install via pip...")
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "pymobiledevice3", "websockets", "requests"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                import pymobiledevice3
-                self._pymobiledevice_available = True
-                logging.info("pymobiledevice3 auto-installed successfully!")
-            except Exception as e:
-                self._pymobiledevice_available = False
-                logging.warning(f"Could not auto-install pymobiledevice3 ({e}). Running in Simulation Mode.")
 
     async def scan_usb_devices(self):
         """
         Scans USB usbmuxd bus for connected iOS devices.
         """
-        if not self._pymobiledevice_available:
-            self.device_info = {
-                "connected": False,
-                "name": "Simulation Mode",
-                "ios_version": "iOS 12 - 26+",
-                "udid": None,
-                "status_text": "Ready (Simulation Mode)"
-            }
-            return self.device_info
-
         try:
             from pymobiledevice3.usbmux import list_devices
-            devices = list_devices()
+            devices = await list_devices()
             if devices:
                 dev = devices[0]
                 serial = getattr(dev, 'serial', 'iPhone-USB-Device')
@@ -73,7 +46,7 @@ class IOSBridgeServer:
                     "name": "iPhone Connected (USB)",
                     "ios_version": "iOS 12 - 26+",
                     "udid": serial,
-                    "status_text": f"Connected ({serial[:8]}...)"
+                    "status_text": f"🟢 Connected ({serial[:8]}...)"
                 }
             else:
                 self.device_connected = False
@@ -89,7 +62,7 @@ class IOSBridgeServer:
             self.device_connected = False
             self.device_info = {
                 "connected": False,
-                "name": "USB usbmuxd Pending",
+                "name": "Connect iPhone via USB",
                 "ios_version": "N/A",
                 "udid": None,
                 "status_text": "Connect iPhone via USB cable"
@@ -103,7 +76,7 @@ class IOSBridgeServer:
         """
         self.current_location = {"lat": float(lat), "lng": float(lng)}
         
-        if self._pymobiledevice_available and self.device_connected and self.device_info.get("udid"):
+        if self.device_connected and self.device_info.get("udid"):
             try:
                 from pymobiledevice3.lockdown import create_using_usbmux
                 from pymobiledevice3.services.dvt.dvt_secure_socket_client import DvtSecureSocketClient
@@ -151,7 +124,7 @@ class IOSBridgeServer:
             "type": "INIT_STATUS",
             "version": BRIDGE_VERSION,
             "device": self.device_info,
-            "py_available": self._pymobiledevice_available
+            "py_available": True
         }))
 
         try:
