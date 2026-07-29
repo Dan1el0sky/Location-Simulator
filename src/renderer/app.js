@@ -15,6 +15,7 @@ class LocationSimulatorApp {
     // Map markers & polylines
     this.waypointMarkers = []; // Array of L.marker
     this.userMarker = null;
+    this.phoneLocationMarker = null;
     this.routePolyline = null;
     
     // Multi-waypoint coordinates array [[lat, lng], [lat, lng], ...]
@@ -97,6 +98,12 @@ class LocationSimulatorApp {
         }
         break;
 
+      case 'PHONE_LOCATION':
+        if (msg.lat && msg.lng) {
+          this.updatePhoneLocationMarker(msg.lat, msg.lng);
+        }
+        break;
+
       case 'STEP_UPDATE':
         if (msg.total_steps && msg.total_steps > this.calculatedSteps) {
           this.calculatedSteps = msg.total_steps;
@@ -114,6 +121,26 @@ class LocationSimulatorApp {
       dotEl.className = 'status-dot';
       if (stateClass === 'connected') dotEl.classList.add('connected');
       if (stateClass === 'simulating') dotEl.classList.add('simulating');
+    }
+  }
+
+  updatePhoneLocationMarker(lat, lng) {
+    const coordsEl = document.getElementById('phone-coords-display');
+    if (coordsEl) {
+      coordsEl.innerText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+
+    if (!this.phoneLocationMarker) {
+      const phoneIcon = L.divIcon({
+        className: 'phone-location-marker',
+        html: '<div style="background:#06b6d4; width:16px; height:16px; border-radius:50%; border:2px solid #fff; box-shadow: 0 0 10px #06b6d4;"></div>',
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
+      });
+      this.phoneLocationMarker = L.marker([lat, lng], { icon: phoneIcon }).addTo(this.map);
+      this.phoneLocationMarker.bindPopup('<b>📱 Current Phone Location</b>');
+    } else {
+      this.phoneLocationMarker.setLatLng([lat, lng]);
     }
   }
 
@@ -406,7 +433,7 @@ class LocationSimulatorApp {
 
       if (currPos && this.userMarker) {
         this.userMarker.setLatLng([currPos.lat, currPos.lng]);
-        this.map.panTo([currPos.lat, currPos.lng], { animate: true, duration: 0.1 });
+        this.map.panTo([currPos.lat, currPos.lng], { animate: true, duration: 0.05 });
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(jsonStr({

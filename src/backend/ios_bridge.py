@@ -139,6 +139,15 @@ class IOSBridgeServer:
                     logging.error(f"Error setting location via native DVT: {ex}")
                     await self._cleanup_dvt_session()
 
+        # Broadcast live location back to frontend
+        if self.connected_clients:
+            phone_loc_msg = json.dumps({
+                "type": "PHONE_LOCATION",
+                "lat": lat_f,
+                "lng": lng_f
+            })
+            await asyncio.gather(*[client.send(phone_loc_msg) for client in self.connected_clients if client.open])
+
         return {"status": "ok", "lat": lat_f, "lng": lng_f}
 
     async def clear_location(self):
