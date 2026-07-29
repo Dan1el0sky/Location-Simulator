@@ -77,21 +77,43 @@ class IOSBridgeServer:
         self.current_location = {"lat": float(lat), "lng": float(lng)}
         
         if self.device_connected and self.device_info.get("udid"):
+            udid = self.device_info["udid"]
+            pushed = False
+
+            # Method 1: Direct DVT LocationSimulation Service
             try:
                 from pymobiledevice3.lockdown import create_using_usbmux
                 from pymobiledevice3.services.dvt.dvt_secure_socket_client import DvtSecureSocketClient
                 from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
 
                 if not self._lockdown_client:
-                    self._lockdown_client = create_using_usbmux(udid=self.device_info["udid"])
+                    self._lockdown_client = create_using_usbmux(udid=udid)
 
                 with DvtSecureSocketClient(self._lockdown_client) as dvt:
                     sim = LocationSimulation(dvt)
                     sim.set(float(lat), float(lng))
-                    logging.info(f"Pushed Location to iPhone ({self.device_info['udid']}): {lat:.6f}, {lng:.6f}")
+                    logging.info(f"Pushed Location to iPhone ({udid}): {lat:.6f}, {lng:.6f}")
+                    pushed = True
             except Exception as e:
                 self._lockdown_client = None
-                logging.debug(f"Location push notice: {e}")
+                logging.debug(f"Method 1 location push notice: {e}")
+
+            # Method 2: CLI Subprocess Fallback (handles iOS 17+ DVT RSD auto-tunnels)
+            if not pushed:
+                try:
+                    cmd = [
+                        sys.executable, "-m", "pymobiledevice3",
+                        "developer", "dvt", "simulate-location", "set",
+                        "--lat", str(lat), "--lon", str(lng)
+                    ]
+                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
+                    if proc.returncode == 0:
+                        logging.info(f"CLI Pushed Location to iPhone ({udid}): {lat:.6f}, {lng:.6f}")
+                        pushed = True
+                    else:
+                        logging.warning(f"CLI Location push stderr: {proc.stderr.strip()}")
+                except Exception as ex:
+                    logging.debug(f"Method 2 location push notice: {ex}")
 
         return {"status": "ok", "lat": lat, "lng": lng}
 
