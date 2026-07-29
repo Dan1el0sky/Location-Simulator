@@ -46,6 +46,16 @@ export default function App() {
   const [speed, setSpeed] = useState(15); // km/h
   const [isLooping, setIsLooping] = useState(false);
 
+  const speedRef = useRef(speed);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+
+  const isLoopingRef = useRef(isLooping);
+  useEffect(() => {
+    isLoopingRef.current = isLooping;
+  }, [isLooping]);
+
   // Map zoom override trigger
   const [mapCenter, setMapCenter] = useState<[number, number] | null>(null);
 
@@ -53,8 +63,10 @@ export default function App() {
   const [routeWaypoints, setRouteWaypoints] = useState<[number, number][]>([]);
   const [routeLine, setRouteLine] = useState<[number, number][]>([]);
   const [isSimulatingRoute, setIsSimulatingRoute] = useState(false);
+  const [hasStartedSimulation, setHasStartedSimulation] = useState(false);
   const routeIntervalRef = useRef<number | null>(null);
   const currentRouteIndex = useRef(0);
+  const originalRouteLineRef = useRef<[number, number][]>([]);
 
   // Socket
   const wsRef = useRef<WebSocket | null>(null);
@@ -191,8 +203,10 @@ export default function App() {
       const res = await fetch(`http://router.project-osrm.org/route/v1/driving/${coords}?overview=full`);
       const data = await res.json();
       if (data.routes && data.routes[0]) {
-        const decoded = polyline.decode(data.routes[0].geometry);
-        setRouteLine(decoded as [number, number][]);
+        const decoded = polyline.decode(data.routes[0].geometry) as [number, number][];
+        setRouteLine(decoded);
+        originalRouteLineRef.current = decoded.map(coord => [...coord] as [number, number]);
+        currentRouteIndex.current = 0;
       }
     } catch (e) {
       console.error("OSRM Route Error", e);
@@ -202,16 +216,27 @@ export default function App() {
   const startRouteSimulation = () => {
     if (routeLine.length === 0) return;
     setIsSimulatingRoute(true);
-    currentRouteIndex.current = 0;
+    setHasStartedSimulation(true);
 
     const tickRateMs = 1000;
 
     routeIntervalRef.current = window.setInterval(() => {
       if (currentRouteIndex.current >= routeLine.length - 1) {
-        if (isLooping) {
+        if (isLoopingRef.current) {
            currentRouteIndex.current = 0;
+           if (originalRouteLineRef.current.length > 0) {
+              const restored = originalRouteLineRef.current.map(coord => [...coord] as [number, number]);
+              setRouteLine(restored);
+              setBackendLocation(restored[0][0], restored[0][1]);
+           }
         } else {
            stopRouteSimulation();
+           currentRouteIndex.current = 0;
+           setHasStartedSimulation(false);
+           if (originalRouteLineRef.current.length > 0) {
+              const restored = originalRouteLineRef.current.map(coord => [...coord] as [number, number]);
+              setRouteLine(restored);
+           }
            return;
         }
       }
@@ -222,7 +247,7 @@ export default function App() {
       // Interpolate based on speed (simple linear interpolation for demo)
       // distance in km
       const dist = getDistance(p1[0], p1[1], p2[0], p2[1]);
-      const speedKmS = speed / 3600;
+      const speedKmS = speedRef.current / 3600;
 
       // if point is close enough based on speed, just jump to it
       if (dist < speedKmS) {
@@ -250,8 +275,22 @@ export default function App() {
 
   const clearRoute = () => {
     stopRouteSimulation();
+    currentRouteIndex.current = 0;
+    setHasStartedSimulation(false);
+    originalRouteLineRef.current = [];
     setRouteWaypoints([]);
     setRouteLine([]);
+  };
+
+  const cancelRouteSimulation = () => {
+    stopRouteSimulation();
+    currentRouteIndex.current = 0;
+    setHasStartedSimulation(false);
+    if (originalRouteLineRef.current.length > 0) {
+      const restored = originalRouteLineRef.current.map(coord => [...coord] as [number, number]);
+      setRouteLine(restored);
+      setBackendLocation(restored[0][0], restored[0][1]);
+    }
   };
 
   return (
@@ -351,11 +390,16 @@ export default function App() {
                </button>
                {!isSimulatingRoute ? (
                   <button onClick={startRouteSimulation} disabled={routeLine.length === 0} className="px-3 py-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded text-sm font-medium flex items-center gap-1 transition">
-                     <Play size={14}/> Start
+                     <Play size={14}/> {hasStartedSimulation ? 'Continue' : 'Start'}
                   </button>
                ) : (
                   <button onClick={stopRouteSimulation} className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 rounded text-sm font-medium flex items-center gap-1 transition">
                      <Square size={14}/> Pause
+                  </button>
+               )}
+               {(isSimulatingRoute || hasStartedSimulation) && (
+                  <button onClick={cancelRouteSimulation} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm font-medium flex items-center gap-1 transition">
+                     <X size={14}/> Cancel
                   </button>
                )}
                <button onClick={clearRoute} className="px-3 py-1 bg-red-600/80 hover:bg-red-500 disabled:opacity-50 rounded text-sm font-medium transition">Clear</button>
