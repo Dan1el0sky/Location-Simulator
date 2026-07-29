@@ -6,7 +6,7 @@ echo Starting Location Simulator...
 REM Ensure node modules are installed
 if not exist "node_modules\" (
     echo [INFO] Installing required Node.js dependencies...
-    call npm install
+    cmd /c "npm install"
 )
 
 REM Ensure Python environment is setup
@@ -22,6 +22,6 @@ if not exist "venv\" (
 
 echo [INFO] Starting Location Simulator application...
 REM Run via Vite + Electron
-call npm run dev
+cmd /c "npm run dev"
 
 pause
