@@ -2,6 +2,10 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { spawn, ChildProcess } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null
 let pythonProcess: ChildProcess | null = null
@@ -22,9 +26,6 @@ function startPythonBackend() {
 
   try {
     pythonProcess = spawn(pythonExecutable, [scriptPath], {
-      // In dev we could use venv python, but assuming python is globally available is safer for production
-      // unless we package it. For this assignment, we'll assume global python + pip install is fine since we
-      // provide the start.bat script which creates a venv and runs the app.
       shell: true
     })
 
@@ -72,8 +73,6 @@ function createWindow() {
 }
 
 app.on('ready', () => {
-  // If we are running via start.bat, the python backend might be started manually or via venv
-  // For safety, we start it here as well, relying on global 'python' command
   startPythonBackend()
   createWindow()
 })
