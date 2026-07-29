@@ -1,9 +1,6 @@
 import asyncio
 import json
 import logging
-import os
-import sys
-import subprocess
 import websockets
 
 from step_calculator import StepCalculator
@@ -26,8 +23,12 @@ class IOSBridgeServer:
             "status_text": "Connect iPhone via USB cable"
         }
         self.current_location = {"lat": 0.0, "lng": 0.0}
-        self._active_sim_proc = None
-        self._last_pushed_location = (0.0, 0.0)
+        
+        # Native DVT Session handles
+        self._rsd = None
+        self._dvt = None
+        self._sim = None
+        self._is_connecting_dvt = False
 
     async def scan_usb_devices(self):
         """
@@ -56,6 +57,7 @@ class IOSBridgeServer:
                     "udid": None,
                     "status_text": "Connect iPhone via USB cable"
                 }
+                await self._cleanup_dvt_session()
         except Exception as e:
             logging.debug(f"USB Scan check: {e}")
             self.device_connected = False
@@ -69,45 +71,73 @@ class IOSBridgeServer:
 
         return self.device_info
 
+    async def _cleanup_dvt_session(self):
+        """
+        Clean up open DVT / RSD connections.
+        """
+        if self._dvt:
+            try:
+                await self._dvt.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._dvt = None
+
+        self._rsd = None
+        self._sim = None
+
+    async def _ensure_dvt_session(self):
+        """
+        Ensures a single, long-lived native DVT LocationSimulation session is open over userspace RSD tunnel.
+        """
+        if self._sim and self._dvt:
+            return True
+
+        if self._is_connecting_dvt:
+            return False
+
+        self._is_connecting_dvt = True
+        try:
+            from pymobiledevice3.remote.userspace_tunnel import establish_userspace_rsd
+            from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
+            from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
+
+            logging.info("Connecting native Userspace RSD Tunnel...")
+            self._rsd = await establish_userspace_rsd()
+            
+            logging.info("Initializing persistent DVT Provider...")
+            self._dvt = DvtProvider(self._rsd)
+            await self._dvt.__aenter__()
+
+            logging.info("Opening DVT LocationSimulation channel...")
+            self._sim = LocationSimulation(self._dvt)
+            await self._sim.__aenter__()
+
+            logging.info("🟢 Native DVT LocationSimulation Session ACTIVE & READY!")
+            return True
+        except Exception as e:
+            logging.error(f"Failed to establish DVT session: {e}")
+            await self._cleanup_dvt_session()
+            return False
+        finally:
+            self._is_connecting_dvt = False
+
     async def set_location(self, lat, lng):
         """
-        Sends coordinates (lat, lng) to mounted iOS device via pymobiledevice3 using explicit --userspace.
+        Sends coordinates (lat, lng) to mounted iOS device instantly over persistent native DVT channel.
         """
         lat_f = float(lat)
         lng_f = float(lng)
         self.current_location = {"lat": lat_f, "lng": lng_f}
 
-        if self.device_connected and self.device_info.get("udid"):
-            udid = self.device_info["udid"]
-
-            # Only spawn new process if location moved significantly (>0.5 meters) or no process exists
-            dist_moved = abs(lat_f - self._last_pushed_location[0]) + abs(lng_f - self._last_pushed_location[1])
-            if dist_moved > 0.000005 or self._active_sim_proc is None:
-                self._last_pushed_location = (lat_f, lng_f)
-                
-                # Terminate previous location process cleanly
-                if self._active_sim_proc and self._active_sim_proc.poll() is None:
-                    try:
-                        self._active_sim_proc.kill()
-                    except Exception:
-                        pass
-
+        if self.device_connected:
+            session_ready = await self._ensure_dvt_session()
+            if session_ready and self._sim:
                 try:
-                    cmd = [
-                        sys.executable, "-m", "pymobiledevice3",
-                        "developer", "dvt", "simulate-location", "set",
-                        "--userspace", "--", str(lat_f), str(lng_f)
-                    ]
-                    self._active_sim_proc = subprocess.Popen(
-                        cmd,
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True
-                    )
-                    logging.info(f"🟢 Location Pushed to iPhone ({udid}): {lat_f:.6f}, {lng_f:.6f}")
+                    await self._sim.set(lat_f, lng_f)
+                    logging.info(f"🟢 Instant Location Pushed to iPhone ({self.device_info.get('udid', '')[:8]}): {lat_f:.6f}, {lng_f:.6f}")
                 except Exception as ex:
-                    logging.error(f"Error executing simulate-location: {ex}")
+                    logging.error(f"Error setting location via native DVT: {ex}")
+                    await self._cleanup_dvt_session()
 
         return {"status": "ok", "lat": lat_f, "lng": lng_f}
 
@@ -115,20 +145,13 @@ class IOSBridgeServer:
         """
         Clears location simulation on device.
         """
-        if self._active_sim_proc:
+        if self._sim:
             try:
-                self._active_sim_proc.kill()
-            except Exception:
-                pass
-            self._active_sim_proc = None
-
-        if self.device_connected:
-            try:
-                cmd = [sys.executable, "-m", "pymobiledevice3", "developer", "dvt", "simulate-location", "clear", "--userspace"]
-                subprocess.run(cmd, timeout=4)
+                await self._sim.clear()
                 logging.info("Location simulation cleared on iPhone.")
             except Exception:
                 pass
+        await self._cleanup_dvt_session()
 
     async def background_usb_monitor(self):
         """
