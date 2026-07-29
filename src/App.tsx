@@ -52,6 +52,7 @@ export default function App() {
   // Routing State
   const [routeWaypoints, setRouteWaypoints] = useState<[number, number][]>([]);
   const [routeLine, setRouteLine] = useState<[number, number][]>([]);
+  const [redoStack, setRedoStack] = useState<[number, number][]>([]);
   const [isSimulatingRoute, setIsSimulatingRoute] = useState(false);
   const routeIntervalRef = useRef<number | null>(null);
   const currentRouteIndex = useRef(0);
@@ -98,6 +99,48 @@ export default function App() {
      }
      setPosition([lat, lng]);
   }, []);
+
+  const undoPoint = useCallback(() => {
+    if (isSimulatingRoute || routeWaypoints.length === 0) return;
+    const newWaypoints = [...routeWaypoints];
+    const popped = newWaypoints.pop();
+    if (popped) {
+      setRouteWaypoints(newWaypoints);
+      setRedoStack(prev => [...prev, popped]);
+      setRouteLine([]);
+    }
+  }, [isSimulatingRoute, routeWaypoints]);
+
+  const redoPoint = useCallback(() => {
+    if (isSimulatingRoute || redoStack.length === 0) return;
+    const newRedo = [...redoStack];
+    const popped = newRedo.pop();
+    if (popped) {
+      setRedoStack(newRedo);
+      setRouteWaypoints(prev => [...prev, popped]);
+      setRouteLine([]);
+    }
+  }, [isSimulatingRoute, redoStack]);
+
+  useEffect(() => {
+    const handleUndoRedoKeys = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      if (window.getSelection()?.toString()) return;
+
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+      if (isCtrlOrMeta) {
+        if (e.key.toLowerCase() === 'c') {
+          e.preventDefault();
+          undoPoint();
+        } else if (e.key.toLowerCase() === 'y') {
+          e.preventDefault();
+          redoPoint();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleUndoRedoKeys);
+    return () => window.removeEventListener('keydown', handleUndoRedoKeys);
+  }, [undoPoint, redoPoint]);
 
   const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371;
@@ -182,6 +225,7 @@ export default function App() {
   const handleMapClick = (lat: number, lng: number) => {
     if (isSimulatingRoute) return;
     setRouteWaypoints(prev => [...prev, [lat, lng]]);
+    setRedoStack([]);
   };
 
   const generateRoute = async () => {
@@ -252,6 +296,7 @@ export default function App() {
     stopRouteSimulation();
     setRouteWaypoints([]);
     setRouteLine([]);
+    setRedoStack([]);
   };
 
   return (
