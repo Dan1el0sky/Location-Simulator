@@ -134,14 +134,15 @@ class IOSBridgeServer:
         finally:
             self._is_connecting_dvt = False
 
-    async def set_location(self, lat, lng):
+    async def set_location(self, lat, lng, is_keepalive=False):
         """
         Sends coordinates (lat, lng) to mounted iOS device over persistent native DVT channel.
         Rate-limited to 2.5Hz (max once per 0.4s) to prevent iOS locationd packet buffer stalls.
         """
         lat_f = float(lat)
         lng_f = float(lng)
-        self.current_location = {"lat": lat_f, "lng": lng_f}
+        if not is_keepalive:
+            self.current_location = {"lat": lat_f, "lng": lng_f}
 
         now = time.time()
         if (now - self._last_dvt_push_time) >= 0.4:
@@ -151,7 +152,8 @@ class IOSBridgeServer:
                 if session_ready and self._sim:
                     try:
                         await self._sim.set(lat_f, lng_f)
-                        logging.info(f"🟢 Location Pushed to iPhone ({self.device_info.get('udid', '')[:8]}): {lat_f:.6f}, {lng_f:.6f}")
+                        if not is_keepalive:
+                            logging.info(f"🟢 Location Pushed to iPhone ({self.device_info.get('udid', '')[:8]}): {lat_f:.6f}, {lng_f:.6f}")
                     except Exception as ex:
                         logging.error(f"Error setting location via native DVT: {ex}")
                         await self._cleanup_dvt_session()
@@ -177,6 +179,23 @@ class IOSBridgeServer:
             except Exception:
                 pass
         await self._cleanup_dvt_session()
+        self.current_location = {"lat": 0.0, "lng": 0.0}
+
+    async def background_location_keepalive(self):
+        """
+        Periodically pushes the last known location to the device to prevent it from reverting
+        when idle.
+        """
+        while True:
+            await asyncio.sleep(5)
+            if self.device_connected and (self.current_location["lat"] != 0.0 or self.current_location["lng"] != 0.0):
+                now = time.time()
+                if (now - self._last_dvt_push_time) >= 10.0:
+                    logging.info("Sending location keep-alive to iPhone...")
+                    try:
+                        await self.set_location(self.current_location["lat"], self.current_location["lng"], is_keepalive=True)
+                    except Exception as e:
+                        logging.error(f"Keep-alive error: {e}")
 
     async def background_usb_monitor(self):
         """
@@ -266,6 +285,7 @@ async def main():
     logging.info(f"Starting Location Simulator iOS Bridge v{BRIDGE_VERSION} on ws://localhost:{WS_PORT}...")
     
     asyncio.create_task(bridge.background_usb_monitor())
+    asyncio.create_task(bridge.background_location_keepalive())
 
     async with websockets.serve(bridge.handle_client, "127.0.0.1", WS_PORT):
         await asyncio.Future()
