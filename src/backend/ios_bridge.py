@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import subprocess
 import traceback
 import websockets
 
@@ -36,8 +37,15 @@ class IOSBridgeServer:
             self._pymobiledevice_available = True
             logging.info("pymobiledevice3 successfully detected.")
         except ImportError:
-            self._pymobiledevice_available = False
-            logging.warning("pymobiledevice3 module not found. Running in high-speed Simulation Mode.")
+            logging.info("pymobiledevice3 module missing. Attempting auto-install via pip...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pymobiledevice3", "websockets", "requests"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                import pymobiledevice3
+                self._pymobiledevice_available = True
+                logging.info("pymobiledevice3 auto-installed successfully!")
+            except Exception as e:
+                self._pymobiledevice_available = False
+                logging.warning(f"Could not auto-install pymobiledevice3 ({e}). Running in Simulation Mode.")
 
     async def scan_usb_devices(self):
         """
@@ -58,7 +66,7 @@ class IOSBridgeServer:
             devices = list_devices()
             if devices:
                 dev = devices[0]
-                serial = getattr(dev, 'serial', '00008101-000000000000000')
+                serial = getattr(dev, 'serial', 'iPhone-USB-Device')
                 self.device_connected = True
                 self.device_info = {
                     "connected": True,
@@ -84,7 +92,7 @@ class IOSBridgeServer:
                 "name": "USB usbmuxd Pending",
                 "ios_version": "N/A",
                 "udid": None,
-                "status_text": "Waiting for iTunes/usbmux driver..."
+                "status_text": "Connect iPhone via USB cable"
             }
 
         return self.device_info
@@ -109,7 +117,6 @@ class IOSBridgeServer:
                     sim.set(float(lat), float(lng))
                     logging.info(f"Pushed Location to iPhone ({self.device_info['udid']}): {lat:.6f}, {lng:.6f}")
             except Exception as e:
-                # Reset cached client on error so it reconnects on next tick
                 self._lockdown_client = None
                 logging.debug(f"Location push notice: {e}")
 
@@ -117,7 +124,7 @@ class IOSBridgeServer:
 
     async def background_usb_monitor(self):
         """
-        Background task that checks USB connection every 1.5 seconds and broadcasts updates to clients.
+        Background task that checks USB connection every 1.5 seconds and broadcasts updates.
         """
         last_status = None
         while True:
@@ -140,7 +147,6 @@ class IOSBridgeServer:
         self.connected_clients.add(websocket)
         logging.info(f"Client connected. Active clients: {len(self.connected_clients)}")
 
-        # Send initial status immediately
         await websocket.send(json.dumps({
             "type": "INIT_STATUS",
             "version": BRIDGE_VERSION,
@@ -200,11 +206,10 @@ async def main():
     bridge = IOSBridgeServer()
     logging.info(f"Starting Location Simulator iOS Bridge v{BRIDGE_VERSION} on ws://localhost:{WS_PORT}...")
     
-    # Launch background USB scanner task
     asyncio.create_task(bridge.background_usb_monitor())
 
     async with websockets.serve(bridge.handle_client, "127.0.0.1", WS_PORT):
-        await asyncio.Future()  # Keep running
+        await asyncio.Future()
 
 if __name__ == "__main__":
     try:

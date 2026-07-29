@@ -14,7 +14,6 @@ class LocationSimulatorApp {
 
     // Map markers & polylines
     this.waypointMarkers = []; // Array of L.marker
-    this.poiMarkers = [];      // Array of business POI markers
     this.userMarker = null;
     this.routePolyline = null;
     
@@ -77,7 +76,7 @@ class LocationSimulatorApp {
 
       this.ws.onclose = () => {
         console.warn('[WS] Bridge disconnected. Reconnecting in 3s...');
-        this.updateDeviceStatus('Disconnected', 'disconnected');
+        this.updateDeviceStatus('Ready (Simulation Mode)', 'disconnected');
         setTimeout(() => this.initWebSocket(), 3000);
       };
     } catch (e) {
@@ -93,7 +92,7 @@ class LocationSimulatorApp {
         if (msg.device && msg.device.connected) {
           this.updateDeviceStatus(`🟢 ${msg.device.name} (${msg.device.ios_version})`, 'connected');
         } else if (msg.device) {
-          const statusText = msg.device.status_text || msg.device.name;
+          const statusText = msg.device.status_text || 'Ready (Simulation Mode)';
           this.updateDeviceStatus(`📱 ${statusText}`, 'disconnected');
         }
         break;
@@ -119,7 +118,7 @@ class LocationSimulatorApp {
   }
 
   /* --------------------------------------------------------------------------
-     Leaflet Map Setup, Multiple Tile Layers & Business POIs
+     Leaflet Map Setup & Multiple Tile Layers
      -------------------------------------------------------------------------- */
   initMap() {
     this.map = L.map('map-viewport', {
@@ -135,7 +134,7 @@ class LocationSimulatorApp {
       maxZoom: 19
     });
 
-    // 2. CartoDB Voyager Detailed Street View (Displays full business names, shops, cafes & POIs)
+    // 2. CartoDB Voyager Detailed Street View
     this.tileLayers.voyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
       subdomains: 'abcd',
@@ -155,6 +154,13 @@ class LocationSimulatorApp {
 
     // Click map to add waypoints
     this.map.on('click', (e) => this.handleMapClick(e));
+
+    // Prevent style switcher bar clicks from adding waypoints on the map!
+    const styleBar = document.querySelector('.map-style-bar');
+    if (styleBar) {
+      L.DomEvent.disableClickPropagation(styleBar);
+      L.DomEvent.disableScrollPropagation(styleBar);
+    }
   }
 
   setMapStyle(styleName) {
@@ -164,63 +170,9 @@ class LocationSimulatorApp {
     this.tileLayers[styleName].addTo(this.map);
     this.currentTileStyle = styleName;
 
-    // Update active UI buttons
     document.querySelectorAll('.map-style-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.style === styleName);
     });
-  }
-
-  async loadNearbyBusinesses() {
-    const bounds = this.map.getBounds();
-    const btn = document.getElementById('btn-load-pois');
-    if (btn) btn.innerHTML = '<span>⏳</span> <span>Searching Businesses...</span>';
-
-    try {
-      const pois = await this.routeEngine.fetchNearbyPOIs(
-        bounds.getSouth(),
-        bounds.getWest(),
-        bounds.getNorth(),
-        bounds.getEast()
-      );
-
-      // Clear existing POI markers
-      this.poiMarkers.forEach(m => this.map.removeLayer(m));
-      this.poiMarkers = [];
-
-      pois.forEach(poi => {
-        const poiIcon = L.divIcon({
-          className: 'custom-poi-marker',
-          html: `<div style="background:rgba(15,23,42,0.9); border:2px solid #06b6d4; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; box-shadow: 0 0 8px rgba(6,182,212,0.5);">${poi.icon}</div>`,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12]
-        });
-
-        const marker = L.marker([poi.lat, poi.lng], { icon: poiIcon }).addTo(this.map);
-        
-        const popupContent = document.createElement('div');
-        popupContent.style.padding = '4px';
-        popupContent.innerHTML = `
-          <div style="font-weight:bold; font-size:13px; margin-bottom:2px;">${poi.icon} ${poi.name}</div>
-          <div style="font-size:11px; color:#94a3b8; margin-bottom:8px;">${poi.category}</div>
-          <button class="poi-add-btn" style="width:100%; padding:6px; background:#06b6d4; border:none; border-radius:4px; color:#0b0f19; font-weight:bold; font-size:11px; cursor:pointer;">
-            ➕ Add to Waypoints
-          </button>
-        `;
-
-        popupContent.querySelector('.poi-add-btn').addEventListener('click', () => {
-          this.addWaypoint(poi.lat, poi.lng);
-          this.map.closePopup();
-        });
-
-        marker.bindPopup(popupContent);
-        this.poiMarkers.push(marker);
-      });
-
-      if (btn) btn.innerHTML = `<span>🏢</span> <span>Found ${pois.length} Businesses</span>`;
-    } catch (e) {
-      console.warn('[POI] Error loading businesses:', e);
-      if (btn) btn.innerHTML = '<span>🏢</span> <span>Show Nearby Businesses</span>';
-    }
   }
 
   async fetchInitialLocation() {
@@ -261,7 +213,7 @@ class LocationSimulatorApp {
   }
 
   /* --------------------------------------------------------------------------
-     Multi-Waypoint Route Management
+     Multi-Waypoint Route Management & Undo (Ctrl+Z)
      -------------------------------------------------------------------------- */
   handleMapClick(e) {
     if (this.isSimulating) return;
@@ -290,6 +242,26 @@ class LocationSimulatorApp {
 
     if (this.waypoints.length >= 2) {
       await this.calculateAndDrawRoute();
+    }
+  }
+
+  undoLastWaypoint() {
+    if (this.isSimulating || this.waypoints.length === 0) return;
+
+    // Remove last waypoint & marker
+    this.waypoints.pop();
+    const lastMarker = this.waypointMarkers.pop();
+    if (lastMarker) this.map.removeLayer(lastMarker);
+
+    if (this.waypoints.length >= 2) {
+      this.calculateAndDrawRoute();
+    } else {
+      if (this.routePolyline) {
+        this.map.removeLayer(this.routePolyline);
+        this.routePolyline = null;
+      }
+      this.routeData = null;
+      this.updateRouteStatsPreview();
     }
   }
 
@@ -352,8 +324,6 @@ class LocationSimulatorApp {
   clearRoute() {
     this.waypointMarkers.forEach(m => this.map.removeLayer(m));
     this.waypointMarkers = [];
-    this.poiMarkers.forEach(m => this.map.removeLayer(m));
-    this.poiMarkers = [];
     this.waypoints = [];
     if (this.userMarker) { this.map.removeLayer(this.userMarker); this.userMarker = null; }
     if (this.routePolyline) { this.map.removeLayer(this.routePolyline); this.routePolyline = null; }
@@ -512,16 +482,28 @@ class LocationSimulatorApp {
      Search Autocomplete & UI Event Bindings
      -------------------------------------------------------------------------- */
   bindEvents() {
+    // Ctrl+Z Undo Waypoint Keyboard Shortcut
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        this.undoLastWaypoint();
+      }
+    });
+
+    // Undo Button Handler
+    const undoBtn = document.getElementById('btn-undo-waypoint');
+    if (undoBtn) {
+      undoBtn.addEventListener('click', () => this.undoLastWaypoint());
+    }
+
     // Map Style Switcher Buttons
     document.querySelectorAll('.map-style-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const style = e.currentTarget.dataset.style;
         this.setMapStyle(style);
       });
     });
-
-    // Business & POIs Button
-    document.getElementById('btn-load-pois').addEventListener('click', () => this.loadNearbyBusinesses());
 
     // Speed Preset Buttons
     const presetBtns = document.querySelectorAll('.preset-btn');
@@ -604,7 +586,6 @@ class LocationSimulatorApp {
       }, 300);
     });
 
-    // Close dropdown on outside click
     document.addEventListener('click', (e) => {
       if (!e.target.closest('#search-input') && !e.target.closest('#search-results-dropdown')) {
         if (dropdown) dropdown.style.display = 'none';

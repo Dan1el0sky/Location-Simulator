@@ -44,8 +44,8 @@
           <div class="section-title">📍 Location & Multi-Waypoint Route</div>
           
           <div class="input-group" style="position: relative;">
-            <span class="input-label">Search Location or Business</span>
-            <input type="text" id="search-input" class="input-field" placeholder="Search shop, cafe, park, or city..." autocomplete="off">
+            <span class="input-label">Search Location</span>
+            <input type="text" id="search-input" class="input-field" placeholder="Search address, park, or city..." autocomplete="off">
             <!-- Autocomplete Suggestions List -->
             <div id="search-results-dropdown" class="search-dropdown"></div>
           </div>
@@ -59,6 +59,10 @@
               </select>
             </div>
 
+            <button id="btn-undo-waypoint" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Undo Last Waypoint (Ctrl+Z)">
+              ↩️ Undo
+            </button>
+
             <button id="btn-reverse-route" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Reverse Route Direction">
               🔄 Reverse
             </button>
@@ -67,11 +71,6 @@
               🗑️ Clear
             </button>
           </div>
-
-          <!-- Business / POI Load Button -->
-          <button id="btn-load-pois" class="btn-secondary" style="width: 100%; margin-bottom: 10px; font-size: 12px; background: rgba(6, 182, 212, 0.15); border-color: rgba(6, 182, 212, 0.3);">
-            <span>🏢</span> <span>Show Nearby Businesses & POIs</span>
-          </button>
 
           <!-- Route Preview Stats Box -->
           <div id="route-stats-preview" class="route-stats-box" style="display: none;">
@@ -85,7 +84,7 @@
           </div>
           
           <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
-            💡 Click on map to add waypoints: <b>1st = Start</b>, <b>2nd = End</b> (click more for waypoints).
+            💡 Click on map to add waypoints. Press <b>Ctrl+Z</b> to undo last waypoint.
           </div>
         </div>
 
