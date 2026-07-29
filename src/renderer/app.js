@@ -8,8 +8,13 @@ class LocationSimulatorApp {
     this.routeEngine = new RouteEngine();
     this.speedEngine = new SpeedVarianceEngine();
 
+    // Tile layers
+    this.tileLayers = {};
+    this.currentTileStyle = 'dark';
+
     // Map markers & polylines
     this.waypointMarkers = []; // Array of L.marker
+    this.poiMarkers = [];      // Array of business POI markers
     this.userMarker = null;
     this.routePolyline = null;
     
@@ -94,7 +99,6 @@ class LocationSimulatorApp {
         break;
 
       case 'STEP_UPDATE':
-        // Sync steps from Python backend if higher
         if (msg.total_steps && msg.total_steps > this.calculatedSteps) {
           this.calculatedSteps = msg.total_steps;
           this.updateStepsUI();
@@ -115,7 +119,7 @@ class LocationSimulatorApp {
   }
 
   /* --------------------------------------------------------------------------
-     Leaflet Map Setup & IP Geolocation Fallback
+     Leaflet Map Setup, Multiple Tile Layers & Business POIs
      -------------------------------------------------------------------------- */
   initMap() {
     this.map = L.map('map-viewport', {
@@ -124,17 +128,99 @@ class LocationSimulatorApp {
       zoomControl: false
     });
 
-    // Custom dark mode tiles (CartoDB Dark Matter)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+    // 1. Dark Mode Tile Layer
+    this.tileLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
       subdomains: 'abcd',
       maxZoom: 19
-    }).addTo(this.map);
+    });
+
+    // 2. CartoDB Voyager Detailed Street View (Displays full business names, shops, cafes & POIs)
+    this.tileLayers.voyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 19
+    });
+
+    // 3. Esri World Imagery Satellite View
+    this.tileLayers.satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri',
+      maxZoom: 18
+    });
+
+    // Set default dark layer
+    this.tileLayers.dark.addTo(this.map);
 
     L.control.zoom({ position: 'topright' }).addTo(this.map);
 
     // Click map to add waypoints
     this.map.on('click', (e) => this.handleMapClick(e));
+  }
+
+  setMapStyle(styleName) {
+    if (!this.tileLayers[styleName] || styleName === this.currentTileStyle) return;
+
+    this.map.removeLayer(this.tileLayers[this.currentTileStyle]);
+    this.tileLayers[styleName].addTo(this.map);
+    this.currentTileStyle = styleName;
+
+    // Update active UI buttons
+    document.querySelectorAll('.map-style-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.style === styleName);
+    });
+  }
+
+  async loadNearbyBusinesses() {
+    const bounds = this.map.getBounds();
+    const btn = document.getElementById('btn-load-pois');
+    if (btn) btn.innerHTML = '<span>⏳</span> <span>Searching Businesses...</span>';
+
+    try {
+      const pois = await this.routeEngine.fetchNearbyPOIs(
+        bounds.getSouth(),
+        bounds.getWest(),
+        bounds.getNorth(),
+        bounds.getEast()
+      );
+
+      // Clear existing POI markers
+      this.poiMarkers.forEach(m => this.map.removeLayer(m));
+      this.poiMarkers = [];
+
+      pois.forEach(poi => {
+        const poiIcon = L.divIcon({
+          className: 'custom-poi-marker',
+          html: `<div style="background:rgba(15,23,42,0.9); border:2px solid #06b6d4; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; box-shadow: 0 0 8px rgba(6,182,212,0.5);">${poi.icon}</div>`,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+
+        const marker = L.marker([poi.lat, poi.lng], { icon: poiIcon }).addTo(this.map);
+        
+        const popupContent = document.createElement('div');
+        popupContent.style.padding = '4px';
+        popupContent.innerHTML = `
+          <div style="font-weight:bold; font-size:13px; margin-bottom:2px;">${poi.icon} ${poi.name}</div>
+          <div style="font-size:11px; color:#94a3b8; margin-bottom:8px;">${poi.category}</div>
+          <button class="poi-add-btn" style="width:100%; padding:6px; background:#06b6d4; border:none; border-radius:4px; color:#0b0f19; font-weight:bold; font-size:11px; cursor:pointer;">
+            ➕ Add to Waypoints
+          </button>
+        `;
+
+        popupContent.querySelector('.poi-add-btn').addEventListener('click', () => {
+          this.addWaypoint(poi.lat, poi.lng);
+          this.map.closePopup();
+        });
+
+        marker.bindPopup(popupContent);
+        this.poiMarkers.push(marker);
+      });
+
+      if (btn) btn.innerHTML = `<span>🏢</span> <span>Found ${pois.length} Businesses</span>`;
+    } catch (e) {
+      console.warn('[POI] Error loading businesses:', e);
+      if (btn) btn.innerHTML = '<span>🏢</span> <span>Show Nearby Businesses</span>';
+    }
   }
 
   async fetchInitialLocation() {
@@ -186,7 +272,6 @@ class LocationSimulatorApp {
   async addWaypoint(lat, lng) {
     this.waypoints.push([lat, lng]);
 
-    // Create marker
     const index = this.waypoints.length;
     const isStart = index === 1;
     const color = isStart ? '#10b981' : '#f43f5e';
@@ -194,9 +279,9 @@ class LocationSimulatorApp {
 
     const pinIcon = L.divIcon({
       className: 'custom-pin-waypoint',
-      html: `<div style="background:${color}; width:18px; height:18px; border-radius:50%; border:3px solid #fff; box-shadow: 0 0 10px ${color}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-weight:bold;">${index}</div>`,
-      iconSize: [18, 18],
-      iconAnchor: [9, 9]
+      html: `<div style="background:${color}; width:20px; height:20px; border-radius:50%; border:3px solid #fff; box-shadow: 0 0 12px ${color}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:bold;">${index}</div>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
     });
 
     const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(this.map);
@@ -220,8 +305,8 @@ class LocationSimulatorApp {
 
       this.routePolyline = L.polyline(this.routeData.coordinates, {
         color: '#06b6d4',
-        weight: 5,
-        opacity: 0.85,
+        weight: 6,
+        opacity: 0.9,
         dashArray: '8, 8'
       }).addTo(this.map);
 
@@ -267,6 +352,8 @@ class LocationSimulatorApp {
   clearRoute() {
     this.waypointMarkers.forEach(m => this.map.removeLayer(m));
     this.waypointMarkers = [];
+    this.poiMarkers.forEach(m => this.map.removeLayer(m));
+    this.poiMarkers = [];
     this.waypoints = [];
     if (this.userMarker) { this.map.removeLayer(this.userMarker); this.userMarker = null; }
     if (this.routePolyline) { this.map.removeLayer(this.routePolyline); this.routePolyline = null; }
@@ -332,10 +419,8 @@ class LocationSimulatorApp {
     this.lastTickTimestamp = timestamp;
 
     if (!this.isPaused) {
-      // 1. Tick speed engine for smooth speed (km/h) with natural variance & auto pause
       const { speedKmh, state } = this.speedEngine.tick(deltaSec);
 
-      // 2. Meters traversed in deltaSec
       const speedMs = (speedKmh * 1000.0) / 3600.0;
       const distDelta = speedMs * deltaSec;
 
@@ -343,19 +428,16 @@ class LocationSimulatorApp {
       this.traversedDistanceMeters += distDelta;
       const currPos = this.routeEngine.interpolatePosition(this.routeData.coordinates, this.traversedDistanceMeters);
 
-      // 3. Instant Step Calculation Client-side (~0.75m average stride length)
       if (distDelta > 0) {
         const stepIncrement = distDelta / 0.75;
         this.calculatedSteps += stepIncrement;
         this.updateStepsUI();
       }
 
-      // 4. Update map marker & pan camera smoothly
       if (currPos && this.userMarker) {
         this.userMarker.setLatLng([currPos.lat, currPos.lng]);
         this.map.panTo([currPos.lat, currPos.lng], { animate: true, duration: 0.1 });
 
-        // Push position to Python backend for USB device
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(jsonStr({
             type: 'SET_LOCATION',
@@ -375,13 +457,11 @@ class LocationSimulatorApp {
         }
       }
 
-      // 5. Update Telemetry UI (Damped at 2Hz for clean readability)
       if (timestamp - this.lastUiSpeedUpdate > 400) {
         this.lastUiSpeedUpdate = timestamp;
         this.updateTelemetryUI(speedKmh, state);
       }
 
-      // 6. Check route completion or looping
       if (this.traversedDistanceMeters >= this.routeData.distanceMeters) {
         if (this.loopRoute) {
           console.log('[Simulation] Loop Route enabled. Reversing route...');
@@ -432,6 +512,17 @@ class LocationSimulatorApp {
      Search Autocomplete & UI Event Bindings
      -------------------------------------------------------------------------- */
   bindEvents() {
+    // Map Style Switcher Buttons
+    document.querySelectorAll('.map-style-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const style = e.currentTarget.dataset.style;
+        this.setMapStyle(style);
+      });
+    });
+
+    // Business & POIs Button
+    document.getElementById('btn-load-pois').addEventListener('click', () => this.loadNearbyBusinesses());
+
     // Speed Preset Buttons
     const presetBtns = document.querySelectorAll('.preset-btn');
     presetBtns.forEach(btn => {
@@ -543,7 +634,6 @@ class LocationSimulatorApp {
 
     dropdown.style.display = 'block';
 
-    // Click item handler
     dropdown.querySelectorAll('.search-dropdown-item').forEach(el => {
       el.addEventListener('click', (e) => {
         const lat = parseFloat(e.currentTarget.dataset.lat);

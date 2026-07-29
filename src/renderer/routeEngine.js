@@ -1,11 +1,12 @@
 /**
- * OSRM Multi-Waypoint Route Generator & Search Engine for Location Simulator v1.0.0
+ * OSRM Multi-Waypoint Route Generator, Geocoder & POI Search Engine for Location Simulator v1.0.0
  */
 
 export class RouteEngine {
   constructor() {
     this.osrmBaseUrl = 'https://router.project-osrm.org/route/v1';
     this.nominatimUrl = 'https://nominatim.openstreetmap.org';
+    this.overpassUrl = 'https://overpass-api.de/api/interpreter';
   }
 
   /**
@@ -32,9 +33,50 @@ export class RouteEngine {
   }
 
   /**
+   * Fetch nearby businesses, shops, cafes, and landmarks using Overpass API
+   */
+  async fetchNearbyPOIs(south, west, north, east) {
+    // Restrict bounding box size to prevent heavy payload
+    const bbox = `${south.toFixed(4)},${west.toFixed(4)},${north.toFixed(4)},${east.toFixed(4)}`;
+    const queryData = `[out:json][timeout:10];(node["amenity"](${bbox});node["shop"](${bbox});node["tourism"](${bbox}););out body 40;`;
+
+    try {
+      const response = await fetch(`${this.overpassUrl}?data=${encodeURIComponent(queryData)}`);
+      if (!response.ok) throw new Error('Overpass API network response error');
+      const data = await response.json();
+
+      if (!data.elements) return [];
+
+      return data.elements
+        .filter(el => el.tags && (el.tags.name || el.tags.amenity || el.tags.shop))
+        .map(el => {
+          const tags = el.tags || {};
+          let icon = '🏢';
+          let category = 'Business';
+
+          if (tags.amenity === 'cafe') { icon = '☕'; category = 'Cafe'; }
+          else if (tags.amenity === 'restaurant' || tags.amenity === 'fast_food') { icon = '🍔'; category = 'Restaurant'; }
+          else if (tags.shop) { icon = '🛒'; category = `Shop (${tags.shop})`; }
+          else if (tags.tourism || tags.amenity === 'park') { icon = '🏞️'; category = 'Landmark / Park'; }
+          else if (tags.amenity === 'bank' || tags.amenity === 'pharmacy') { icon = '🏦'; category = 'Service'; }
+
+          return {
+            id: el.id,
+            name: tags.name || `${category} (${tags.amenity || tags.shop})`,
+            category,
+            icon,
+            lat: el.lat,
+            lng: el.lon
+          };
+        });
+    } catch (err) {
+      console.warn('[RouteEngine] Overpass POI fetch notice:', err);
+      return [];
+    }
+  }
+
+  /**
    * Calculate route polyline between multiple coordinates array [ [lat, lon], [lat, lon], ... ]
-   * @param {Array} coordinatesArray Array of [lat, lon] waypoints
-   * @param {string} profile 'foot' or 'car'
    */
   async getRoute(coordinatesArray, profile = 'foot') {
     if (!coordinatesArray || coordinatesArray.length < 2) {
@@ -42,7 +84,6 @@ export class RouteEngine {
     }
 
     const osrmProfile = profile === 'car' ? 'driving' : 'foot';
-    // OSRM expects coordinates in lon,lat format separated by semicolons
     const coordString = coordinatesArray.map(c => `${c[1]},${c[0]}`).join(';');
     const url = `${this.osrmBaseUrl}/${osrmProfile}/${coordString}?overview=full&geometries=geojson`;
 
@@ -57,7 +98,6 @@ export class RouteEngine {
       }
 
       const primaryRoute = data.routes[0];
-      // Convert OSRM GeoJSON [lon, lat] coordinates back to [lat, lon]
       const pathCoordinates = primaryRoute.geometry.coordinates.map(c => [c[1], c[0]]);
 
       return {
@@ -96,9 +136,6 @@ export class RouteEngine {
     return R * c;
   }
 
-  /**
-   * Interpolate exact position along polyline at distance targetDistanceMeters
-   */
   interpolatePosition(coordinates, targetDistanceMeters) {
     if (!coordinates || coordinates.length === 0) return null;
     if (coordinates.length === 1 || targetDistanceMeters <= 0) {

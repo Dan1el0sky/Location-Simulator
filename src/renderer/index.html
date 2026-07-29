@@ -44,8 +44,8 @@
           <div class="section-title">📍 Location & Multi-Waypoint Route</div>
           
           <div class="input-group" style="position: relative;">
-            <span class="input-label">Search Location</span>
-            <input type="text" id="search-input" class="input-field" placeholder="Search address, park, or city..." autocomplete="off">
+            <span class="input-label">Search Location or Business</span>
+            <input type="text" id="search-input" class="input-field" placeholder="Search shop, cafe, park, or city..." autocomplete="off">
             <!-- Autocomplete Suggestions List -->
             <div id="search-results-dropdown" class="search-dropdown"></div>
           </div>
@@ -68,6 +68,11 @@
             </button>
           </div>
 
+          <!-- Business / POI Load Button -->
+          <button id="btn-load-pois" class="btn-secondary" style="width: 100%; margin-bottom: 10px; font-size: 12px; background: rgba(6, 182, 212, 0.15); border-color: rgba(6, 182, 212, 0.3);">
+            <span>🏢</span> <span>Show Nearby Businesses & POIs</span>
+          </button>
+
           <!-- Route Preview Stats Box -->
           <div id="route-stats-preview" class="route-stats-box" style="display: none;">
             <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
@@ -80,7 +85,7 @@
           </div>
           
           <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
-            💡 Click on map to add waypoints: <b>1st = Start</b>, <b>2nd = End</b> (click more to add intermediate waypoints).
+            💡 Click on map to add waypoints: <b>1st = Start</b>, <b>2nd = End</b> (click more for waypoints).
           </div>
         </div>
 
@@ -205,7 +210,14 @@
       </aside>
 
       <!-- Map Viewport -->
-      <main id="map-viewport"></main>
+      <main id="map-viewport">
+        <!-- Floating Map Style Switcher -->
+        <div class="map-style-bar">
+          <button class="map-style-btn active" data-style="dark">🌃 Dark POIs</button>
+          <button class="map-style-btn" data-style="voyager">🗺️ Detailed Map</button>
+          <button class="map-style-btn" data-style="satellite">🛰️ Satellite</button>
+        </div>
+      </main>
     </div>
 
   </div>
