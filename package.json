@@ -1,0 +1,30 @@
+{
+  "name": "location-simulator",
+  "version": "1.0.0",
+  "description": "Windows Desktop iOS Location Simulator with Humanized Movement & Step Counter for Pokémon GO & Pikmin Bloom",
+  "type": "module",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "test": "node tests/run-tests.js",
+    "build": "electron-builder --win"
+  },
+  "keywords": [
+    "location-simulator",
+    "gps-spoofer",
+    "ios-location",
+    "pokemon-go",
+    "pikmin-bloom",
+    "pymobiledevice3",
+    "electron"
+  ],
+  "author": "Dan1el0sky",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}
