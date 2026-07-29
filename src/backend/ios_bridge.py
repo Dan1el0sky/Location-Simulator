@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import websockets
 
 from step_calculator import StepCalculator
@@ -24,11 +25,12 @@ class IOSBridgeServer:
         }
         self.current_location = {"lat": 0.0, "lng": 0.0}
         
-        # Native DVT Session handles
+        # Native DVT Session handles & throttling
         self._rsd = None
         self._dvt = None
         self._sim = None
         self._is_connecting_dvt = False
+        self._last_dvt_push_time = 0.0
 
     async def _broadcast_to_clients(self, message_str):
         """
@@ -134,21 +136,25 @@ class IOSBridgeServer:
 
     async def set_location(self, lat, lng):
         """
-        Sends coordinates (lat, lng) to mounted iOS device instantly over persistent native DVT channel.
+        Sends coordinates (lat, lng) to mounted iOS device over persistent native DVT channel.
+        Rate-limited to 2.5Hz (max once per 0.4s) to prevent iOS locationd packet buffer stalls.
         """
         lat_f = float(lat)
         lng_f = float(lng)
         self.current_location = {"lat": lat_f, "lng": lng_f}
 
-        if self.device_connected:
-            session_ready = await self._ensure_dvt_session()
-            if session_ready and self._sim:
-                try:
-                    await self._sim.set(lat_f, lng_f)
-                    logging.info(f"🟢 Instant Location Pushed to iPhone ({self.device_info.get('udid', '')[:8]}): {lat_f:.6f}, {lng_f:.6f}")
-                except Exception as ex:
-                    logging.error(f"Error setting location via native DVT: {ex}")
-                    await self._cleanup_dvt_session()
+        now = time.time()
+        if (now - self._last_dvt_push_time) >= 0.4:
+            self._last_dvt_push_time = now
+            if self.device_connected:
+                session_ready = await self._ensure_dvt_session()
+                if session_ready and self._sim:
+                    try:
+                        await self._sim.set(lat_f, lng_f)
+                        logging.info(f"🟢 Location Pushed to iPhone ({self.device_info.get('udid', '')[:8]}): {lat_f:.6f}, {lng_f:.6f}")
+                    except Exception as ex:
+                        logging.error(f"Error setting location via native DVT: {ex}")
+                        await self._cleanup_dvt_session()
 
         # Broadcast live location back to frontend safely
         phone_loc_msg = json.dumps({

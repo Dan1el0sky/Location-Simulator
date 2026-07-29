@@ -43,8 +43,9 @@ class LocationSimulatorApp {
     this.animationTimer = null;
     this.lastTickTimestamp = 0;
 
-    // UI Damping timer for readable speed display
+    // UI Damping & GPS push throttling
     this.lastUiSpeedUpdate = 0;
+    this.lastGpsPushTimestamp = 0;
 
     // Search debouncer
     this.searchDebounceTimer = null;
@@ -679,21 +680,26 @@ class LocationSimulatorApp {
         this.userMarker.setLatLng([currPos.lat, currPos.lng]);
         this.map.panTo([currPos.lat, currPos.lng], { animate: true, duration: 0.05 });
 
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(jsonStr({
-            type: 'SET_LOCATION',
-            lat: currPos.lat,
-            lng: currPos.lng
-          }));
+        // Throttle hardware GPS pushes to 2Hz (every 500ms) to prevent iOS location daemon buffer choke
+        if (timestamp - this.lastGpsPushTimestamp >= 500) {
+          this.lastGpsPushTimestamp = timestamp;
 
-          if (prevPos) {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(jsonStr({
-              type: 'UPDATE_STEP_MATH',
-              prev_lat: prevPos.lat,
-              prev_lng: prevPos.lng,
-              curr_lat: currPos.lat,
-              curr_lng: currPos.lng
+              type: 'SET_LOCATION',
+              lat: currPos.lat,
+              lng: currPos.lng
             }));
+
+            if (prevPos) {
+              this.ws.send(jsonStr({
+                type: 'UPDATE_STEP_MATH',
+                prev_lat: prevPos.lat,
+                prev_lng: prevPos.lng,
+                curr_lat: currPos.lat,
+                curr_lng: currPos.lng
+              }));
+            }
           }
         }
       }
