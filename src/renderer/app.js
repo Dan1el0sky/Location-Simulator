@@ -50,6 +50,10 @@ class LocationSimulatorApp {
     // Search debouncer
     this.searchDebounceTimer = null;
 
+    // POI debouncer & tracking
+    this.poiDebounceTimer = null;
+    this.poiMarkers = [];
+
     // Default map center (London fallback before IP location fetch)
     this.currentCenter = { lat: 51.505, lng: -0.09 };
 
@@ -198,12 +202,59 @@ class LocationSimulatorApp {
     // Right click map to place / move Circle Roam area
     this.map.on('contextmenu', (e) => this.handleMapRightClick(e));
 
+    // Fetch POIs on map movement if zoomed in enough
+    this.map.on('moveend', () => this.handleMapMoveEnd());
+
     // Prevent style switcher bar clicks from adding waypoints on the map!
     const styleBar = document.querySelector('.map-style-bar');
     if (styleBar) {
       L.DomEvent.disableClickPropagation(styleBar);
       L.DomEvent.disableScrollPropagation(styleBar);
     }
+  }
+
+  async handleMapMoveEnd() {
+    // Only fetch POIs if zoom is high enough to not overwhelm the API
+    if (this.map.getZoom() < 15) {
+        this.clearPOIMarkers();
+        return;
+    }
+
+    clearTimeout(this.poiDebounceTimer);
+    this.poiDebounceTimer = setTimeout(async () => {
+        const bounds = this.map.getBounds();
+        const south = bounds.getSouth();
+        const west = bounds.getWest();
+        const north = bounds.getNorth();
+        const east = bounds.getEast();
+
+        try {
+            const pois = await this.routeEngine.fetchNearbyPOIs(south, west, north, east);
+            this.renderPOIMarkers(pois);
+        } catch (e) {
+            console.warn('[POI] Fetch failed:', e);
+        }
+    }, 1000); // Wait 1s after map stops moving to fetch
+  }
+
+  clearPOIMarkers() {
+      this.poiMarkers.forEach(marker => this.map.removeLayer(marker));
+      this.poiMarkers = [];
+  }
+
+  renderPOIMarkers(pois) {
+      this.clearPOIMarkers();
+      pois.forEach(poi => {
+          const icon = L.divIcon({
+              className: 'poi-marker',
+              html: `<div style="font-size: 16px; background: rgba(15,23,42,0.8); border-radius: 50%; padding: 4px; border: 1px solid var(--border-glass-glow);">${poi.icon}</div>`,
+              iconSize: [28, 28],
+              iconAnchor: [14, 14]
+          });
+          const marker = L.marker([poi.lat, poi.lng], { icon }).addTo(this.map);
+          marker.bindPopup(`<b>${poi.icon} ${poi.name}</b><br><span style="font-size: 10px; color: var(--text-muted);">${poi.category}</span>`);
+          this.poiMarkers.push(marker);
+      });
   }
 
   setMapStyle(styleName) {
@@ -239,19 +290,35 @@ class LocationSimulatorApp {
 
   async fetchIPLocation() {
     try {
-      const res = await fetch('https://ipapi.co/json/');
+      // Use ip-api.com as it doesn't require an API key and is quite reliable
+      const res = await fetch('http://ip-api.com/json/');
       if (res.ok) {
         const data = await res.json();
-        if (data.latitude && data.longitude) {
-          console.log(`[IP Geolocation] Location: ${data.city}, ${data.country_name}`);
-          this.currentCenter = { lat: data.latitude, lng: data.longitude };
+        if (data.lat && data.lon) {
+          console.log(`[IP Geolocation] Location: ${data.city}, ${data.country}`);
+          this.currentCenter = { lat: data.lat, lng: data.lon };
           this.map.setView([this.currentCenter.lat, this.currentCenter.lng], 14);
           this.addWaypoint(this.currentCenter.lat, this.currentCenter.lng);
           return;
         }
       }
     } catch (e) {
-      console.warn('[IP Geolocation] Failed:', e);
+      console.warn('[IP Geolocation] First provider failed, trying fallback...', e);
+      try {
+          const resFallback = await fetch('https://get.geojs.io/v1/ip/geo.json');
+          if (resFallback.ok) {
+              const dataFallback = await resFallback.json();
+              if (dataFallback.latitude && dataFallback.longitude) {
+                  console.log(`[IP Geolocation] Location: ${dataFallback.city}, ${dataFallback.country}`);
+                  this.currentCenter = { lat: parseFloat(dataFallback.latitude), lng: parseFloat(dataFallback.longitude) };
+                  this.map.setView([this.currentCenter.lat, this.currentCenter.lng], 14);
+                  this.addWaypoint(this.currentCenter.lat, this.currentCenter.lng);
+                  return;
+              }
+          }
+      } catch (e2) {
+          console.warn('[IP Geolocation] Fallback failed:', e2);
+      }
     }
   }
 
