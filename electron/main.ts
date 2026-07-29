@@ -26,7 +26,8 @@ function startPythonBackend() {
   console.log(`Starting python backend at: ${scriptPath}`);
 
   try {
-    pythonProcess = spawn(pythonExecutable, [scriptPath], {
+    // Wrap the script path in double quotes to handle spaces when shell: true is used
+    pythonProcess = spawn(pythonExecutable, [`"${scriptPath}"`], {
       shell: true
     })
 
