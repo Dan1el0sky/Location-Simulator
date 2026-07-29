@@ -3,9 +3,9 @@ title Location Simulator Launcher
 
 echo Starting Location Simulator...
 
-REM Ensure node modules are installed
-if not exist "node_modules\" (
-    echo [INFO] Installing required Node.js dependencies...
+REM Ensure node modules are installed properly
+if not exist "node_modules\vite\bin\vite.js" (
+    echo [INFO] Node dependencies are missing or incomplete. Installing...
     call npm install
 )
 
