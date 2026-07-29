@@ -30,6 +30,17 @@ class IOSBridgeServer:
         self._sim = None
         self._is_connecting_dvt = False
 
+    async def _broadcast_to_clients(self, message_str):
+        """
+        Safely broadcasts JSON message string to all active WebSocket clients.
+        """
+        for client in list(self.connected_clients):
+            try:
+                if not getattr(client, 'closed', False):
+                    await client.send(message_str)
+            except Exception:
+                pass
+
     async def scan_usb_devices(self):
         """
         Scans USB usbmuxd bus for connected iOS devices.
@@ -139,14 +150,13 @@ class IOSBridgeServer:
                     logging.error(f"Error setting location via native DVT: {ex}")
                     await self._cleanup_dvt_session()
 
-        # Broadcast live location back to frontend
-        if self.connected_clients:
-            phone_loc_msg = json.dumps({
-                "type": "PHONE_LOCATION",
-                "lat": lat_f,
-                "lng": lng_f
-            })
-            await asyncio.gather(*[client.send(phone_loc_msg) for client in self.connected_clients if client.open])
+        # Broadcast live location back to frontend safely
+        phone_loc_msg = json.dumps({
+            "type": "PHONE_LOCATION",
+            "lat": lat_f,
+            "lng": lng_f
+        })
+        await self._broadcast_to_clients(phone_loc_msg)
 
         return {"status": "ok", "lat": lat_f, "lng": lng_f}
 
@@ -177,7 +187,7 @@ class IOSBridgeServer:
                         "type": "DEVICE_STATUS",
                         "device": dev_info
                     })
-                    await asyncio.gather(*[client.send(broadcast_msg) for client in self.connected_clients if client.open])
+                    await self._broadcast_to_clients(broadcast_msg)
             except Exception as e:
                 logging.debug(f"Background USB monitor exception: {e}")
 
@@ -243,7 +253,7 @@ class IOSBridgeServer:
         except websockets.exceptions.ConnectionClosed:
             logging.info("Client connection closed.")
         finally:
-            self.connected_clients.remove(websocket)
+            self.connected_clients.discard(websocket)
 
 async def main():
     bridge = IOSBridgeServer()

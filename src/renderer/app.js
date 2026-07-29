@@ -21,6 +21,18 @@ class LocationSimulatorApp {
     // Multi-waypoint coordinates array [[lat, lng], [lat, lng], ...]
     this.waypoints = [];
 
+    // Simulation mode: 'route' | 'circle'
+    this.currentMode = 'route';
+
+    // Circle Roam State
+    this.circleCenter = null; // { lat, lng }
+    this.circleRadius = 100; // meters
+    this.circleOverlay = null; // L.circle
+    this.circleCenterMarker = null; // L.marker
+    this.circleEdgeMarker = null; // L.marker
+    this.circleTargetPoint = null; // { lat, lng }
+    this.circleCurrentPoint = null; // { lat, lng }
+
     // Route state
     this.routeData = null; // { distanceMeters, durationSeconds, coordinates }
     this.traversedDistanceMeters = 0.0;
@@ -182,6 +194,9 @@ class LocationSimulatorApp {
     // Click map to add waypoints
     this.map.on('click', (e) => this.handleMapClick(e));
 
+    // Right click map to place / move Circle Roam area
+    this.map.on('contextmenu', (e) => this.handleMapRightClick(e));
+
     // Prevent style switcher bar clicks from adding waypoints on the map!
     const styleBar = document.querySelector('.map-style-bar');
     if (styleBar) {
@@ -242,10 +257,167 @@ class LocationSimulatorApp {
   /* --------------------------------------------------------------------------
      Multi-Waypoint Route Management & Undo (Ctrl+Z)
      -------------------------------------------------------------------------- */
-  handleMapClick(e) {
+  /* --------------------------------------------------------------------------
+     Circle Roam Mode & Resizable Circle Controls
+     -------------------------------------------------------------------------- */
+  setSimulationMode(mode) {
+    if (this.isSimulating) return;
+    this.currentMode = mode;
+
+    const btnRoute = document.getElementById('tab-mode-route');
+    const btnCircle = document.getElementById('tab-mode-circle');
+    const panelRoute = document.getElementById('panel-route-mode');
+    const panelCircle = document.getElementById('panel-circle-mode');
+
+    if (btnRoute) btnRoute.classList.toggle('active', mode === 'route');
+    if (btnCircle) btnCircle.classList.toggle('active', mode === 'circle');
+    if (panelRoute) panelRoute.style.display = mode === 'route' ? 'block' : 'none';
+    if (panelCircle) panelCircle.style.display = mode === 'circle' ? 'block' : 'none';
+
+    const startBtnSpan = document.querySelector('#btn-start-simulation span:last-child');
+    if (startBtnSpan) {
+      startBtnSpan.innerText = mode === 'route' ? 'Start Route Simulation' : 'Start Circle Roam';
+    }
+
+    if (mode === 'circle' && !this.circleCenter) {
+      const center = this.map.getCenter();
+      this.setCircleCenter(center.lat, center.lng);
+    }
+  }
+
+  handleMapRightClick(e) {
     if (this.isSimulating) return;
     const { lat, lng } = e.latlng;
-    this.addWaypoint(lat, lng);
+    this.setSimulationMode('circle');
+    this.setCircleCenter(lat, lng);
+  }
+
+  setCircleCenter(lat, lng, radius = this.circleRadius) {
+    this.circleCenter = { lat, lng };
+    this.circleRadius = radius;
+    this.renderCircleOnMap();
+  }
+
+  renderCircleOnMap() {
+    if (!this.circleCenter) return;
+
+    const { lat, lng } = this.circleCenter;
+
+    if (this.circleOverlay) this.map.removeLayer(this.circleOverlay);
+    if (this.circleCenterMarker) this.map.removeLayer(this.circleCenterMarker);
+    if (this.circleEdgeMarker) this.map.removeLayer(this.circleEdgeMarker);
+
+    // 1. Draw cyan glass circle overlay
+    this.circleOverlay = L.circle([lat, lng], {
+      radius: this.circleRadius,
+      color: '#06b6d4',
+      weight: 2,
+      fillColor: '#06b6d4',
+      fillOpacity: 0.15,
+      dashArray: '6, 6'
+    }).addTo(this.map);
+
+    // 2. Center Draggable Marker (📌)
+    const centerIcon = L.divIcon({
+      className: 'circle-center-marker',
+      html: '<div style="background:#06b6d4; width:22px; height:22px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 12px #06b6d4; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; cursor:move;">📌</div>',
+      iconSize: [22, 22],
+      iconAnchor: [11, 11]
+    });
+
+    this.circleCenterMarker = L.marker([lat, lng], { icon: centerIcon, draggable: true }).addTo(this.map);
+    this.circleCenterMarker.bindPopup('<b>⭕ Circle Center</b><br>Drag to move roam area');
+
+    this.circleCenterMarker.on('drag', (e) => {
+      const newPos = e.target.getLatLng();
+      this.circleCenter = { lat: newPos.lat, lng: newPos.lng };
+      this.updateCirclePositions();
+    });
+
+    // 3. Edge Handle Draggable Marker (↔️)
+    const edgeCoord = this.getPointAtDistance(lat, lng, this.circleRadius, 90);
+    const edgeIcon = L.divIcon({
+      className: 'circle-edge-marker',
+      html: '<div style="background:#10b981; width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px #10b981; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; cursor:ew-resize;">↔️</div>',
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
+    });
+
+    this.circleEdgeMarker = L.marker([edgeCoord.lat, edgeCoord.lng], { icon: edgeIcon, draggable: true }).addTo(this.map);
+    this.circleEdgeMarker.bindPopup('<b>↔️ Radius Handle</b><br>Drag to resize circle');
+
+    this.circleEdgeMarker.on('drag', (e) => {
+      const newEdgePos = e.target.getLatLng();
+      const newRadiusMeters = this.haversineDistanceMeters(this.circleCenter.lat, this.circleCenter.lng, newEdgePos.lat, newEdgePos.lng);
+      this.circleRadius = Math.max(20, Math.min(1000, Math.round(newRadiusMeters)));
+      
+      const slider = document.getElementById('circle-radius-slider');
+      if (slider) slider.value = this.circleRadius;
+      const display = document.getElementById('circle-radius-val');
+      if (display) display.innerText = `${this.circleRadius} m`;
+
+      this.updateCirclePositions();
+    });
+  }
+
+  updateCirclePositions() {
+    if (!this.circleCenter || !this.circleOverlay) return;
+
+    const { lat, lng } = this.circleCenter;
+    this.circleOverlay.setLatLng([lat, lng]);
+    this.circleOverlay.setRadius(this.circleRadius);
+
+    if (this.circleCenterMarker) this.circleCenterMarker.setLatLng([lat, lng]);
+
+    if (this.circleEdgeMarker) {
+      const edgeCoord = this.getPointAtDistance(lat, lng, this.circleRadius, 90);
+      this.circleEdgeMarker.setLatLng([edgeCoord.lat, edgeCoord.lng]);
+    }
+  }
+
+  clearCircle() {
+    if (this.circleOverlay) this.map.removeLayer(this.circleOverlay);
+    if (this.circleCenterMarker) this.map.removeLayer(this.circleCenterMarker);
+    if (this.circleEdgeMarker) this.map.removeLayer(this.circleEdgeMarker);
+    this.circleOverlay = null;
+    this.circleCenterMarker = null;
+    this.circleEdgeMarker = null;
+    this.circleCenter = null;
+  }
+
+  getRandomPointInCircle(centerLat, centerLng, radiusMeters) {
+    const r = radiusMeters * 0.85 * Math.sqrt(Math.random());
+    const theta = Math.random() * 2 * Math.PI;
+    
+    const latOffset = (r * Math.cos(theta)) / 111320.0;
+    const lngOffset = (r * Math.sin(theta)) / (111320.0 * Math.cos(centerLat * Math.PI / 180.0));
+    
+    return { lat: centerLat + latOffset, lng: centerLng + lngOffset };
+  }
+
+  getPointAtDistance(lat, lng, distanceMeters, bearingDeg) {
+    const R = 6371000.0;
+    const brng = bearingDeg * Math.PI / 180.0;
+    const d = distanceMeters;
+    
+    const lat1 = lat * Math.PI / 180.0;
+    const lon1 = lng * Math.PI / 180.0;
+    
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d / R) + Math.cos(lat1) * Math.sin(d / R) * Math.cos(brng));
+    const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(d / R) * Math.cos(lat1), Math.cos(d / R) - Math.sin(lat1) * Math.sin(lat2));
+    
+    return { lat: lat2 * 180.0 / Math.PI, lng: lon2 * 180.0 / Math.PI };
+  }
+
+  haversineDistanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000.0;
+    const dLat = (lat2 - lat1) * Math.PI / 180.0;
+    const dLon = (lon2 - lon1) * Math.PI / 180.0;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180.0) * Math.cos(lat2 * Math.PI / 180.0) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
   }
 
   async addWaypoint(lat, lng) {
@@ -372,12 +544,21 @@ class LocationSimulatorApp {
   }
 
   /* --------------------------------------------------------------------------
-     Simulation Engine Loop
+     Simulation Engine Loop (Route & Circle Roam Modes)
      -------------------------------------------------------------------------- */
   startSimulation() {
-    if (!this.routeData || this.waypoints.length < 2) {
-      alert('Please select at least 2 waypoints on the map to create a route first.');
-      return;
+    if (this.currentMode === 'route') {
+      if (!this.routeData || this.waypoints.length < 2) {
+        alert('Please select at least 2 waypoints on the map to create a route first.');
+        return;
+      }
+    } else if (this.currentMode === 'circle') {
+      if (!this.circleCenter) {
+        const center = this.map.getCenter();
+        this.setCircleCenter(center.lat, center.lng);
+      }
+      this.circleCurrentPoint = { ...this.circleCenter };
+      this.circleTargetPoint = this.getRandomPointInCircle(this.circleCenter.lat, this.circleCenter.lng, this.circleRadius);
     }
 
     this.isSimulating = true;
@@ -393,7 +574,7 @@ class LocationSimulatorApp {
       iconSize: [24, 24],
       iconAnchor: [12, 12]
     });
-    const startCoord = this.routeData.coordinates[0];
+    const startCoord = this.currentMode === 'route' ? this.routeData.coordinates[0] : [this.circleCenter.lat, this.circleCenter.lng];
     this.userMarker = L.marker([startCoord[0], startCoord[1]], { icon: pulseIcon }).addTo(this.map);
 
     this.updateDeviceStatus('Spoofing Active', 'simulating');
@@ -421,9 +602,38 @@ class LocationSimulatorApp {
       const speedMs = (speedKmh * 1000.0) / 3600.0;
       const distDelta = speedMs * deltaSec;
 
-      const prevPos = this.routeEngine.interpolatePosition(this.routeData.coordinates, this.traversedDistanceMeters);
-      this.traversedDistanceMeters += distDelta;
-      const currPos = this.routeEngine.interpolatePosition(this.routeData.coordinates, this.traversedDistanceMeters);
+      let prevPos = null;
+      let currPos = null;
+
+      if (this.currentMode === 'route') {
+        prevPos = this.routeEngine.interpolatePosition(this.routeData.coordinates, this.traversedDistanceMeters);
+        this.traversedDistanceMeters += distDelta;
+        currPos = this.routeEngine.interpolatePosition(this.routeData.coordinates, this.traversedDistanceMeters);
+      } else if (this.currentMode === 'circle') {
+        prevPos = { ...this.circleCurrentPoint };
+        const distToTarget = this.haversineDistanceMeters(
+          this.circleCurrentPoint.lat, this.circleCurrentPoint.lng,
+          this.circleTargetPoint.lat, this.circleTargetPoint.lng
+        );
+
+        if (distToTarget <= distDelta || distToTarget < 1.0) {
+          this.circleCurrentPoint = { ...this.circleTargetPoint };
+          this.circleTargetPoint = this.getRandomPointInCircle(this.circleCenter.lat, this.circleCenter.lng, this.circleRadius);
+        } else {
+          const bearing = Math.atan2(
+            this.circleTargetPoint.lng - this.circleCurrentPoint.lng,
+            this.circleTargetPoint.lat - this.circleCurrentPoint.lat
+          ) * 180.0 / Math.PI;
+
+          this.circleCurrentPoint = this.getPointAtDistance(
+            this.circleCurrentPoint.lat, this.circleCurrentPoint.lng,
+            distDelta, bearing
+          );
+        }
+
+        this.traversedDistanceMeters += distDelta;
+        currPos = { ...this.circleCurrentPoint };
+      }
 
       if (distDelta > 0) {
         const stepIncrement = distDelta / 0.75;
@@ -459,7 +669,7 @@ class LocationSimulatorApp {
         this.updateTelemetryUI(speedKmh, state);
       }
 
-      if (this.traversedDistanceMeters >= this.routeData.distanceMeters) {
+      if (this.currentMode === 'route' && this.traversedDistanceMeters >= this.routeData.distanceMeters) {
         if (this.loopRoute) {
           console.log('[Simulation] Loop Route enabled. Reversing route...');
           this.waypoints.reverse();
@@ -513,6 +723,38 @@ class LocationSimulatorApp {
      Search Autocomplete & UI Event Bindings
      -------------------------------------------------------------------------- */
   bindEvents() {
+    // Mode Switcher Tabs
+    const tabRoute = document.getElementById('tab-mode-route');
+    const tabCircle = document.getElementById('tab-mode-circle');
+
+    if (tabRoute) tabRoute.addEventListener('click', () => this.setSimulationMode('route'));
+    if (tabCircle) tabCircle.addEventListener('click', () => this.setSimulationMode('circle'));
+
+    // Circle Controls
+    const circleSlider = document.getElementById('circle-radius-slider');
+    if (circleSlider) {
+      circleSlider.addEventListener('input', (e) => {
+        const radius = parseInt(e.target.value);
+        this.circleRadius = radius;
+        const display = document.getElementById('circle-radius-val');
+        if (display) display.innerText = `${radius} m`;
+        this.updateCirclePositions();
+      });
+    }
+
+    const btnPlaceCircleCenter = document.getElementById('btn-place-circle-center');
+    if (btnPlaceCircleCenter) {
+      btnPlaceCircleCenter.addEventListener('click', () => {
+        const center = this.map.getCenter();
+        this.setCircleCenter(center.lat, center.lng);
+      });
+    }
+
+    const btnClearCircle = document.getElementById('btn-clear-circle');
+    if (btnClearCircle) {
+      btnClearCircle.addEventListener('click', () => this.clearCircle());
+    }
+
     // Ctrl+Z Undo Waypoint Keyboard Shortcut
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {

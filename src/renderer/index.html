@@ -42,53 +42,85 @@
       <!-- Control Sidebar -->
       <aside class="control-sidebar">
         
-        <!-- Search & Waypoint Section -->
+        <!-- Search & Mode Selector Section -->
         <div class="card-section" style="position: relative;">
-          <div class="section-title">📍 Location & Multi-Waypoint Route</div>
-          
-          <div class="input-group" style="position: relative;">
+          <!-- Mode Tabs -->
+          <div class="mode-tabs-bar">
+            <button class="mode-tab-btn active" id="tab-mode-route">📍 Multi-Waypoint</button>
+            <button class="mode-tab-btn" id="tab-mode-circle">⭕ Circle Roam</button>
+          </div>
+
+          <div class="input-group" style="position: relative; margin-top: 10px;">
             <span class="input-label">Search Location</span>
             <input type="text" id="search-input" class="input-field" placeholder="Search address, park, or city..." autocomplete="off">
             <!-- Autocomplete Suggestions List -->
             <div id="search-results-dropdown" class="search-dropdown"></div>
           </div>
 
-          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <div class="input-group" style="flex: 1; margin-bottom: 0;">
-              <span class="input-label">Profile</span>
-              <select id="route-profile-select" class="input-field">
-                <option value="foot" selected>🚶 Foot (Walk/Run)</option>
-                <option value="car">🚗 Car (Driving)</option>
-              </select>
+          <!-- Multi-Waypoint Panel -->
+          <div id="panel-route-mode">
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+              <div class="input-group" style="flex: 1; margin-bottom: 0;">
+                <span class="input-label">Profile</span>
+                <select id="route-profile-select" class="input-field">
+                  <option value="foot" selected>🚶 Foot (Walk/Run)</option>
+                  <option value="car">🚗 Car (Driving)</option>
+                </select>
+              </div>
+
+              <button id="btn-undo-waypoint" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Undo Last Waypoint (Ctrl+Z)">
+                ↩️ Undo
+              </button>
+
+              <button id="btn-reverse-route" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Reverse Route Direction">
+                🔄 Reverse
+              </button>
+              
+              <button id="btn-clear-route" class="btn-secondary btn-danger" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Clear All Waypoints">
+                🗑️ Clear
+              </button>
             </div>
 
-            <button id="btn-undo-waypoint" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Undo Last Waypoint (Ctrl+Z)">
-              ↩️ Undo
-            </button>
-
-            <button id="btn-reverse-route" class="btn-secondary" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Reverse Route Direction">
-              🔄 Reverse
-            </button>
+            <!-- Route Preview Stats Box -->
+            <div id="route-stats-preview" class="route-stats-box" style="display: none;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+                <span><b>Path Distance:</b> <span id="preview-distance">0.00 km</span></span>
+                <span><b>Est. Time:</b> <span id="preview-duration">0 min</span></span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted);">
+                Waypoints: <span id="preview-waypoints-count">0</span> | Mode: <span id="preview-mode">Loop Disabled</span>
+              </div>
+            </div>
             
-            <button id="btn-clear-route" class="btn-secondary btn-danger" style="width: auto; padding: 0 12px; margin-top: 18px;" title="Clear All Waypoints">
-              🗑️ Clear
-            </button>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+              💡 Left-click on map to add waypoints. Press <b>Ctrl+Z</b> to undo.
+            </div>
           </div>
 
-          <!-- Route Preview Stats Box -->
-          <div id="route-stats-preview" class="route-stats-box" style="display: none;">
-            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
-              <span><b>Path Distance:</b> <span id="preview-distance">0.00 km</span></span>
-              <span><b>Est. Time:</b> <span id="preview-duration">0 min</span></span>
+          <!-- Circle Roam Panel -->
+          <div id="panel-circle-mode" style="display: none;">
+            <div class="input-group" style="margin-top: 8px;">
+              <span class="input-label">
+                <span>Circle Radius</span>
+                <span id="circle-radius-val" style="color: var(--accent-cyan); font-weight: 600;">100 m</span>
+              </span>
+              <input type="range" id="circle-radius-slider" class="range-slider" min="20" max="1000" step="10" value="100">
             </div>
-            <div style="font-size: 11px; color: var(--text-muted);">
-              Waypoints: <span id="preview-waypoints-count">0</span> | Mode: <span id="preview-mode">Loop Disabled</span>
+
+            <div style="display: flex; gap: 8px; margin-top: 8px;">
+              <button id="btn-place-circle-center" class="btn-secondary" style="flex: 1;">
+                🎯 Center on Map
+              </button>
+              <button id="btn-clear-circle" class="btn-secondary btn-danger" style="width: auto; padding: 0 14px;">
+                🗑️ Remove Circle
+              </button>
+            </div>
+
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 8px;">
+              💡 <b>Right-click</b> on map to set circle center. Drag the 📌 center marker to move it, or drag the ↔️ perimeter marker to resize!
             </div>
           </div>
-          
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
-            💡 Click on map to add waypoints. Press <b>Ctrl+Z</b> to undo last waypoint.
-          </div>
+
         </div>
 
         <!-- Speed Presets & Input -->
