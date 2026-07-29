@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 import subprocess
-import traceback
 import websockets
 
 from step_calculator import StepCalculator
@@ -72,7 +71,7 @@ class IOSBridgeServer:
 
     async def set_location(self, lat, lng):
         """
-        Sends coordinates (lat, lng) to mounted iOS device via pymobiledevice3.
+        Sends coordinates (lat, lng) to mounted iOS device via pymobiledevice3 using explicit --userspace.
         """
         lat_f = float(lat)
         lng_f = float(lng)
@@ -81,15 +80,15 @@ class IOSBridgeServer:
         if self.device_connected and self.device_info.get("udid"):
             udid = self.device_info["udid"]
 
-            # Only spawn new process if location changed significantly (>0.5m)
+            # Only spawn new process if location moved significantly (>0.5 meters) or no process exists
             dist_moved = abs(lat_f - self._last_pushed_location[0]) + abs(lng_f - self._last_pushed_location[1])
             if dist_moved > 0.000005 or self._active_sim_proc is None:
                 self._last_pushed_location = (lat_f, lng_f)
                 
-                # Terminate previous location process if active
-                if self._active_sim_proc and self._active_sim_proc.returncode is None:
+                # Terminate previous location process cleanly
+                if self._active_sim_proc and self._active_sim_proc.poll() is None:
                     try:
-                        self._active_sim_proc.terminate()
+                        self._active_sim_proc.kill()
                     except Exception:
                         pass
 
@@ -97,10 +96,11 @@ class IOSBridgeServer:
                     cmd = [
                         sys.executable, "-m", "pymobiledevice3",
                         "developer", "dvt", "simulate-location", "set",
-                        "--", str(lat_f), str(lng_f)
+                        "--userspace", "--", str(lat_f), str(lng_f)
                     ]
                     self._active_sim_proc = subprocess.Popen(
                         cmd,
+                        stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True
@@ -117,15 +117,15 @@ class IOSBridgeServer:
         """
         if self._active_sim_proc:
             try:
-                self._active_sim_proc.terminate()
+                self._active_sim_proc.kill()
             except Exception:
                 pass
             self._active_sim_proc = None
 
         if self.device_connected:
             try:
-                cmd = [sys.executable, "-m", "pymobiledevice3", "developer", "dvt", "simulate-location", "clear"]
-                subprocess.run(cmd, timeout=3)
+                cmd = [sys.executable, "-m", "pymobiledevice3", "developer", "dvt", "simulate-location", "clear", "--userspace"]
+                subprocess.run(cmd, timeout=4)
                 logging.info("Location simulation cleared on iPhone.")
             except Exception:
                 pass
