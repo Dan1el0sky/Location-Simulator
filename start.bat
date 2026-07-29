@@ -39,7 +39,7 @@ if not exist "venv\.installed" (
 )
 
 echo [INFO] Starting Location Simulator application...
-REM Run via npx to ensure local node_modules bins are found
-call npx vite
+REM Run vite directly via node to bypass Windows pathing bugs
+node node_modules\vite\bin\vite.js
 
 pause
