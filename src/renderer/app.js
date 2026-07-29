@@ -383,6 +383,19 @@ class LocationSimulatorApp {
     this.circleCenterMarker = null;
     this.circleEdgeMarker = null;
     this.circleCenter = null;
+
+    // Reset Leaflet map cursor & enable dragging if stuck
+    if (this.map) {
+      if (this.map.dragging) this.map.dragging.enable();
+      const container = this.map.getContainer();
+      if (container) {
+        container.style.cursor = '';
+        container.classList.remove('leaflet-drag-target');
+      }
+    }
+
+    // Switch back to Multi-Waypoint Route mode
+    this.setSimulationMode('route');
   }
 
   getRandomPointInCircle(centerLat, centerLng, radiusMeters) {
@@ -420,6 +433,19 @@ class LocationSimulatorApp {
     return R * c;
   }
 
+  handleMapClick(e) {
+    if (this.isSimulating) return;
+
+    if (this.currentMode === 'circle') {
+      const { lat, lng } = e.latlng;
+      this.setCircleCenter(lat, lng);
+      return;
+    }
+
+    const { lat, lng } = e.latlng;
+    this.addWaypoint(lat, lng);
+  }
+
   async addWaypoint(lat, lng) {
     this.waypoints.push([lat, lng]);
 
@@ -445,7 +471,15 @@ class LocationSimulatorApp {
   }
 
   undoLastWaypoint() {
-    if (this.isSimulating || this.waypoints.length === 0) return;
+    if (this.isSimulating) return;
+
+    // Ctrl+Z removes circle if in Circle mode or circle exists!
+    if (this.currentMode === 'circle' || this.circleCenter) {
+      this.clearCircle();
+      return;
+    }
+
+    if (this.waypoints.length === 0) return;
 
     // Remove last waypoint & marker
     this.waypoints.pop();
