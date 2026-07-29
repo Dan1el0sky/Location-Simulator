@@ -41,6 +41,8 @@ export default function App() {
   // Saved Locations
   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
   const [showSavedList, setShowSavedList] = useState(false);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [newLocationName, setNewLocationName] = useState('');
 
   // Movement Settings
   const [speed, setSpeed] = useState(15); // km/h
@@ -137,12 +139,21 @@ export default function App() {
     }
   };
 
-  const saveCurrentLocation = async () => {
+  const openSaveLocationModal = () => {
+     const defaultName = `Location ${Date.now().toString().slice(-4)}`;
+     setNewLocationName(defaultName);
+     setShowSaveModal(true);
+  };
+
+  const handleSaveLocation = async (e?: React.FormEvent) => {
+     if (e) e.preventDefault();
      if (window.electronAPI) {
-        const name = prompt("Enter a name for this location:") || `Location ${Date.now().toString().slice(-4)}`;
+        const name = newLocationName.trim() || `Location ${Date.now().toString().slice(-4)}`;
         const newData = await window.electronAPI.saveLocation({ lat: position[0], lng: position[1], name });
         if (newData) setSavedLocations(newData);
      }
+     setShowSaveModal(false);
+     setNewLocationName('');
   };
 
   // WASD Movement
@@ -277,7 +288,7 @@ export default function App() {
                <div className="text-xs text-gray-400 mb-1">Current Coordinates</div>
                <div className="font-mono text-sm">{position[0].toFixed(5)}, {position[1].toFixed(5)}</div>
              </div>
-             <button onClick={saveCurrentLocation} className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-blue-400 transition" title="Save Location">
+             <button onClick={openSaveLocationModal} className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-blue-400 transition" title="Save Location">
                <Bookmark size={18} />
              </button>
           </div>
@@ -310,18 +321,22 @@ export default function App() {
           {showSavedList && (
             <div className="absolute top-24 right-0 w-80 bg-gray-800/95 backdrop-blur-md border border-gray-700 rounded-xl shadow-xl max-h-80 overflow-y-auto z-[1001] p-2">
               <h3 className="font-bold mb-2 text-sm text-gray-400 px-2">Saved Locations</h3>
-              {savedLocations.map((loc, i) => (
-                 <div key={i} className="flex justify-between items-center p-2 hover:bg-gray-700 rounded-lg group cursor-pointer" onClick={() => {
-                     if (getDistance(position[0], position[1], loc.lat, loc.lng) > 10) setPendingTeleport([loc.lat, loc.lng]);
-                     else { setBackendLocation(loc.lat, loc.lng); setMapCenter([loc.lat, loc.lng]); }
-                     setShowSavedList(false);
-                 }}>
-                    <div className="truncate text-sm flex-1">{loc.name}</div>
-                    <button onClick={(e) => { e.stopPropagation(); window.electronAPI?.deleteLocation(loc).then(setSavedLocations); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-300">
-                       <X size={14} />
-                    </button>
-                 </div>
-              ))}
+              {savedLocations.length === 0 ? (
+                 <div className="text-gray-500 text-xs text-center py-4">No saved locations yet</div>
+              ) : (
+                 savedLocations.map((loc, i) => (
+                    <div key={i} className="flex justify-between items-center p-2 hover:bg-gray-700 rounded-lg group cursor-pointer" onClick={() => {
+                        if (getDistance(position[0], position[1], loc.lat, loc.lng) > 10) setPendingTeleport([loc.lat, loc.lng]);
+                        else { setBackendLocation(loc.lat, loc.lng); setMapCenter([loc.lat, loc.lng]); }
+                        setShowSavedList(false);
+                    }}>
+                       <div className="truncate text-sm flex-1">{loc.name}</div>
+                       <button onClick={(e) => { e.stopPropagation(); window.electronAPI?.deleteLocation(loc).then(setSavedLocations); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-300">
+                          <X size={14} />
+                       </button>
+                    </div>
+                 ))
+              )}
             </div>
           )}
         </div>
@@ -392,6 +407,30 @@ export default function App() {
                  <button onClick={confirmTeleport} className="px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white font-medium">Teleport</button>
               </div>
            </div>
+        </div>
+      )}
+
+      {showSaveModal && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[2000] flex items-center justify-center pointer-events-auto">
+           <form onSubmit={handleSaveLocation} className="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-2xl max-w-sm w-full mx-4">
+              <div className="flex items-center gap-3 text-blue-400 mb-4">
+                 <Bookmark size={24} />
+                 <h2 className="text-xl font-bold text-white">Save Location</h2>
+              </div>
+              <p className="text-gray-300 text-sm mb-4">Enter a name for this saved location:</p>
+              <input
+                type="text"
+                value={newLocationName}
+                onChange={(e) => setNewLocationName(e.target.value)}
+                placeholder="Location Name"
+                className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg px-3 py-2 mb-6 focus:outline-none focus:ring-2 focus:ring-blue-500 font-sans"
+                autoFocus
+              />
+              <div className="flex justify-end gap-3">
+                 <button type="button" onClick={() => setShowSaveModal(false)} className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium transition">Cancel</button>
+                 <button type="submit" className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition">Save</button>
+              </div>
+           </form>
         </div>
       )}
 
