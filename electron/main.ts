@@ -7,13 +7,57 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+import { execSync } from 'node:child_process'
+
 let mainWindow: BrowserWindow | null
 let pythonProcess: ChildProcess | null = null
 
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
+function killPort5001() {
+  const port = 5001;
+  try {
+    if (process.platform === 'win32') {
+      try {
+        const output = execSync(`netstat -ano | findstr :${port}`).toString();
+        const lines = output.split('\n');
+        for (const line of lines) {
+          if (line.includes('LISTENING')) {
+            const parts = line.trim().split(/\s+/);
+            const localAddress = parts[1] || '';
+            if (localAddress.endsWith(`:${port}`)) {
+              const pid = parts[parts.length - 1];
+              if (pid && !isNaN(Number(pid)) && Number(pid) > 0) {
+                console.log(`Killing process ${pid} listening on port ${port}...`);
+                execSync(`taskkill /F /PID ${pid} /T`);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // netstat or findstr will return exit code 1 if no matching connections are found
+      }
+    } else {
+      try {
+        const pid = execSync(`lsof -t -i:${port}`).toString().trim();
+        if (pid) {
+          console.log(`Killing process ${pid} listening on port ${port}...`);
+          execSync(`kill -9 ${pid}`);
+        }
+      } catch (e) {
+        // lsof returns exit code 1 if no process found
+      }
+    }
+  } catch (err) {
+    console.error(`Error while attempting to release port ${port}:`, err);
+  }
+}
+
 function startPythonBackend() {
   const isDev = !app.isPackaged;
+
+  // Make sure port 5001 is free before starting python backend
+  killPort5001();
 
   // In Vite dev, __dirname is `dist-electron`.
   // We need to go up one directory to project root, then down to src/backend.
@@ -45,8 +89,16 @@ function startPythonBackend() {
 
 function stopPythonBackend() {
   if (pythonProcess) {
-    pythonProcess.kill()
-    pythonProcess = null
+    if (process.platform === 'win32' && pythonProcess.pid) {
+      try {
+        spawn('taskkill', ['/pid', pythonProcess.pid.toString(), '/T', '/F'], { shell: true });
+      } catch (err) {
+        console.error("Failed to kill Python process tree:", err);
+      }
+    } else {
+      pythonProcess.kill();
+    }
+    pythonProcess = null;
   }
 }
 

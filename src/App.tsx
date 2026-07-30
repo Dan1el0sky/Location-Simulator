@@ -48,6 +48,16 @@ export default function App() {
   const [speed, setSpeed] = useState(15); // km/h
   const [isLooping, setIsLooping] = useState(false);
 
+  const speedRef = useRef(speed);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+
+  const isLoopingRef = useRef(isLooping);
+  useEffect(() => {
+    isLoopingRef.current = isLooping;
+  }, [isLooping]);
+
   // Map zoom override trigger
   const [mapCenter, setMapCenter] = useState<[number, number] | null>(null);
 
@@ -56,18 +66,34 @@ export default function App() {
   const [routeLine, setRouteLine] = useState<[number, number][]>([]);
   const [redoStack, setRedoStack] = useState<[number, number][]>([]);
   const [isSimulatingRoute, setIsSimulatingRoute] = useState(false);
+  const [hasStartedSimulation, setHasStartedSimulation] = useState(false);
   const routeIntervalRef = useRef<number | null>(null);
   const currentRouteIndex = useRef(0);
+  const originalRouteLineRef = useRef<[number, number][]>([]);
 
   // Socket
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Check if current location is bookmarked (with slight delta tolerance)
+  const isBookmarked = savedLocations.some(
+     loc => Math.abs(loc.lat - position[0]) < 0.00001 && Math.abs(loc.lng - position[1]) < 0.00001
+  );
+
   useEffect(() => {
-    // Load Saved Locations from Electron main process
+    // Load Saved Locations from Electron main process or fallback to localStorage
     if (window.electronAPI) {
        window.electronAPI.readSavedLocations().then((data) => {
           setSavedLocations(data || []);
        });
+    } else {
+       const stored = localStorage.getItem('saved_locations');
+       if (stored) {
+          try {
+             setSavedLocations(JSON.parse(stored));
+          } catch (e) {
+             setSavedLocations([]);
+          }
+       }
     }
 
     const connectWs = () => {
@@ -131,7 +157,7 @@ export default function App() {
 
       const isCtrlOrMeta = e.ctrlKey || e.metaKey;
       if (isCtrlOrMeta) {
-        if (e.key.toLowerCase() === 'c') {
+        if (e.key.toLowerCase() === 'z') {
           e.preventDefault();
           undoPoint();
         } else if (e.key.toLowerCase() === 'y') {
@@ -190,13 +216,59 @@ export default function App() {
 
   const handleSaveLocation = async (e?: React.FormEvent) => {
      if (e) e.preventDefault();
+     const name = newLocationName.trim() || `Location ${Date.now().toString().slice(-4)}`;
+     const newLoc = { lat: position[0], lng: position[1], name };
+
      if (window.electronAPI) {
-        const name = newLocationName.trim() || `Location ${Date.now().toString().slice(-4)}`;
-        const newData = await window.electronAPI.saveLocation({ lat: position[0], lng: position[1], name });
+        const newData = await window.electronAPI.saveLocation(newLoc);
         if (newData) setSavedLocations(newData);
+     } else {
+        const stored = localStorage.getItem('saved_locations');
+        let existing: SavedLocation[] = [];
+        if (stored) {
+           try {
+              existing = JSON.parse(stored);
+           } catch (e) {}
+        }
+        if (!existing.some(loc => loc.lat === newLoc.lat && loc.lng === newLoc.lng)) {
+           existing.push(newLoc);
+           localStorage.setItem('saved_locations', JSON.stringify(existing));
+        }
+        setSavedLocations(existing);
      }
      setShowSaveModal(false);
      setNewLocationName('');
+  };
+
+  const handleDeleteLocation = async (loc: SavedLocation) => {
+     if (window.electronAPI) {
+        const newData = await window.electronAPI.deleteLocation(loc);
+        if (newData) setSavedLocations(newData);
+     } else {
+        const stored = localStorage.getItem('saved_locations');
+        let existing: SavedLocation[] = [];
+        if (stored) {
+           try {
+              existing = JSON.parse(stored);
+           } catch (e) {}
+        }
+        const updated = existing.filter(l => l.lat !== loc.lat || l.lng !== loc.lng);
+        localStorage.setItem('saved_locations', JSON.stringify(updated));
+        setSavedLocations(updated);
+     }
+  };
+
+  const toggleBookmark = async () => {
+     if (isBookmarked) {
+        const matched = savedLocations.find(
+           loc => Math.abs(loc.lat - position[0]) < 0.00001 && Math.abs(loc.lng - position[1]) < 0.00001
+        );
+        if (matched) {
+           await handleDeleteLocation(matched);
+        }
+     } else {
+        openSaveLocationModal();
+     }
   };
 
   // WASD Movement
@@ -246,8 +318,10 @@ export default function App() {
       const res = await fetch(`http://router.project-osrm.org/route/v1/driving/${coords}?overview=full`);
       const data = await res.json();
       if (data.routes && data.routes[0]) {
-        const decoded = polyline.decode(data.routes[0].geometry);
-        setRouteLine(decoded as [number, number][]);
+        const decoded = polyline.decode(data.routes[0].geometry) as [number, number][];
+        setRouteLine(decoded);
+        originalRouteLineRef.current = decoded.map(coord => [...coord] as [number, number]);
+        currentRouteIndex.current = 0;
       }
     } catch (e) {
       console.error("OSRM Route Error", e);
@@ -257,16 +331,27 @@ export default function App() {
   const startRouteSimulation = () => {
     if (routeLine.length === 0) return;
     setIsSimulatingRoute(true);
-    currentRouteIndex.current = 0;
+    setHasStartedSimulation(true);
 
     const tickRateMs = 1000;
 
     routeIntervalRef.current = window.setInterval(() => {
       if (currentRouteIndex.current >= routeLine.length - 1) {
-        if (isLooping) {
+        if (isLoopingRef.current) {
            currentRouteIndex.current = 0;
+           if (originalRouteLineRef.current.length > 0) {
+              const restored = originalRouteLineRef.current.map(coord => [...coord] as [number, number]);
+              setRouteLine(restored);
+              setBackendLocation(restored[0][0], restored[0][1]);
+           }
         } else {
            stopRouteSimulation();
+           currentRouteIndex.current = 0;
+           setHasStartedSimulation(false);
+           if (originalRouteLineRef.current.length > 0) {
+              const restored = originalRouteLineRef.current.map(coord => [...coord] as [number, number]);
+              setRouteLine(restored);
+           }
            return;
         }
       }
@@ -277,7 +362,7 @@ export default function App() {
       // Interpolate based on speed (simple linear interpolation for demo)
       // distance in km
       const dist = getDistance(p1[0], p1[1], p2[0], p2[1]);
-      const speedKmS = speed / 3600;
+      const speedKmS = speedRef.current / 3600;
 
       // if point is close enough based on speed, just jump to it
       if (dist < speedKmS) {
@@ -305,9 +390,23 @@ export default function App() {
 
   const clearRoute = () => {
     stopRouteSimulation();
+    currentRouteIndex.current = 0;
+    setHasStartedSimulation(false);
+    originalRouteLineRef.current = [];
     setRouteWaypoints([]);
     setRouteLine([]);
     setRedoStack([]);
+  };
+
+  const cancelRouteSimulation = () => {
+    stopRouteSimulation();
+    currentRouteIndex.current = 0;
+    setHasStartedSimulation(false);
+    if (originalRouteLineRef.current.length > 0) {
+      const restored = originalRouteLineRef.current.map(coord => [...coord] as [number, number]);
+      setRouteLine(restored);
+      setBackendLocation(restored[0][0], restored[0][1]);
+    }
   };
 
   return (
@@ -333,8 +432,8 @@ export default function App() {
                <div className="text-xs text-gray-400 mb-1">Current Coordinates</div>
                <div className="font-mono text-sm">{position[0].toFixed(5)}, {position[1].toFixed(5)}</div>
              </div>
-             <button onClick={openSaveLocationModal} className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-blue-400 transition" title="Save Location">
-               <Bookmark size={18} />
+             <button onClick={toggleBookmark} className={`p-2 hover:bg-gray-700 rounded-lg transition ${isBookmarked ? 'text-blue-400' : 'text-gray-400 hover:text-blue-400'}`} title={isBookmarked ? "Remove Bookmark" : "Save Location"}>
+               <Bookmark size={18} className={isBookmarked ? "fill-current" : ""} />
              </button>
           </div>
         </div>
@@ -376,7 +475,7 @@ export default function App() {
                         setShowSavedList(false);
                     }}>
                        <div className="truncate text-sm flex-1">{loc.name}</div>
-                       <button onClick={(e) => { e.stopPropagation(); window.electronAPI?.deleteLocation(loc).then(setSavedLocations); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-300">
+                       <button onClick={(e) => { e.stopPropagation(); handleDeleteLocation(loc); }} className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-300" title="Delete Location">
                           <X size={14} />
                        </button>
                     </div>
@@ -411,11 +510,16 @@ export default function App() {
                </button>
                {!isSimulatingRoute ? (
                   <button onClick={startRouteSimulation} disabled={routeLine.length === 0} className="px-3 py-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded text-sm font-medium flex items-center gap-1 transition">
-                     <Play size={14}/> Start
+                     <Play size={14}/> {hasStartedSimulation ? 'Continue' : 'Start'}
                   </button>
                ) : (
                   <button onClick={stopRouteSimulation} className="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 rounded text-sm font-medium flex items-center gap-1 transition">
                      <Square size={14}/> Pause
+                  </button>
+               )}
+               {(isSimulatingRoute || hasStartedSimulation) && (
+                  <button onClick={cancelRouteSimulation} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm font-medium flex items-center gap-1 transition">
+                     <X size={14}/> Cancel
                   </button>
                )}
                <button onClick={clearRoute} className="px-3 py-1 bg-red-600/80 hover:bg-red-500 disabled:opacity-50 rounded text-sm font-medium transition">Clear</button>
