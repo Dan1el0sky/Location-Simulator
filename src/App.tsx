@@ -141,7 +141,7 @@ export default function App() {
 
       const isCtrlOrMeta = e.ctrlKey || e.metaKey;
       if (isCtrlOrMeta) {
-        if (e.key.toLowerCase() === 'c') {
+        if (e.key.toLowerCase() === 'z') {
           e.preventDefault();
           undoPoint();
         } else if (e.key.toLowerCase() === 'y') {
